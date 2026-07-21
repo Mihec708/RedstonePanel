@@ -1,6 +1,6 @@
 # RedstonePanel
 
-**RedstonePanel** is a modern desktop app for managing multiple Minecraft servers from one simple, clean interface. Designed with a redstone-themed aesthetic and built in Python using `tkinter`, it supports starting, stopping, and restarting servers, viewing live console output, sending commands, browsing plugin folders, and monitoring real-time resource usage (CPU/RAM).
+**RedstonePanel** is a modern desktop app for managing multiple Minecraft servers from one simple, clean interface. Designed with a redstone-themed aesthetic and built as a native desktop application with Tauri, Rust, React, and TypeScript, it supports starting, stopping, and restarting servers, viewing live console output, sending commands, browsing plugin folders, and monitoring real-time resource usage (CPU/RAM).
 
 > Ideal for creators running Paper, Velocity, Forge, or other Minecraft server types.
 
@@ -21,8 +21,10 @@
 
 ## 🧱 Requirements
 
-- Python **3.10+**
+- Node.js **20+**, Rust stable, and the Tauri system prerequisites
 - OS: **Windows**, **Linux**, or **macOS**
-- Modules:
+- Install dependencies and run the desktop shell:
   ```bash
-  pip install psutil
+  npm install
+  npm run tauri dev
+  ```

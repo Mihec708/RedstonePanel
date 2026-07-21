@@ -1,0 +1,57 @@
+@font-face { font-family: Minecraftia; src: local('Minecraftia'); font-display: swap; }
+:root { --quartz:#f7f1e6; --quartz-2:#fffaf0; --ink:#2d2926; --muted:#776b61; --red:#8f3534; --red-soft:#c97470; --line:#e4d7c6; --shadow:0 18px 50px #6d433022; }
+* { box-sizing: border-box; }
+body { margin:0; min-height:100vh; color:var(--ink); background:radial-gradient(circle at top left, #fff7ea, var(--quartz)); font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+button, input, select, textarea { font: inherit; }
+button { border:0; cursor:pointer; }
+.app-shell { display:flex; min-height:100vh; }
+.sidebar { position:sticky; top:0; height:100vh; width:290px; padding:24px 18px; display:flex; flex-direction:column; gap:18px; background:linear-gradient(180deg, #fff8ed, #eadfce); border-right:1px solid var(--line); }
+.brand { display:flex; align-items:center; gap:12px; padding:12px; }
+.brand strong { display:block; font-family:Minecraftia, monospace; letter-spacing:.5px; }
+.brand span, .server-card small, .eyebrow { color:var(--muted); font-size:.8rem; }
+.redstone-logo { display:grid; place-items:center; color:#7b2c2b; width:48px; height:48px; border-radius:14px; background:linear-gradient(135deg, #dfaaa0, #8f3534); box-shadow:inset 0 -5px 0 #68272644; }
+.server-list { display:grid; gap:10px; }
+.server-card { display:flex; align-items:center; gap:10px; text-align:left; padding:14px; border-radius:18px; background:#ffffff80; color:var(--ink); border:1px solid transparent; }
+.server-card span { display:grid; gap:2px; }
+.server-card.active { border-color:#b96d68; background:#fff7f2; box-shadow:var(--shadow); }
+.add-server { margin-top:auto; display:flex; align-items:center; justify-content:center; gap:8px; padding:14px; border-radius:18px; color:#fff; background:var(--red); }
+.workspace { flex:1; padding:28px; overflow:auto; }
+.hero { display:flex; align-items:center; justify-content:space-between; gap:24px; padding:28px; border-radius:28px; background:linear-gradient(135deg, #fffdfa, #f1e2d1); box-shadow:var(--shadow); border:1px solid #fff; }
+h1 { margin:.2rem 0; font-size:2.4rem; font-family:Minecraftia, monospace; }
+.hero p { max-width:760px; color:var(--muted); }
+.power-actions, .chips { display:flex; flex-wrap:wrap; gap:10px; }
+.power-actions button, .command-bar button, .primary { display:flex; align-items:center; gap:7px; padding:10px 14px; border-radius:14px; background:#eee1d0; color:var(--ink); }
+.power-actions .danger { background:#ead2ce; color:#7a2020; }
+.grid { display:grid; gap:18px; margin-top:18px; }
+.grid.three { grid-template-columns:repeat(3, minmax(0, 1fr)); }
+.grid.two { grid-template-columns:repeat(2, minmax(0, 1fr)); }
+.metric, .panel { padding:20px; border:1px solid #fff; border-radius:24px; background:#fffaf2cc; box-shadow:var(--shadow); }
+.metric span { color:var(--muted); text-transform:uppercase; letter-spacing:.12em; font-size:.75rem; }
+.metric strong { display:block; margin:6px 0 10px; font-size:2rem; }
+.sparkline { width:100%; height:60px; }
+.sparkline polyline { fill:none; stroke-width:3; stroke-linecap:round; stroke-linejoin:round; }
+.sparkline.red polyline { stroke:#9b3d3d; } .sparkline.gold polyline { stroke:#b68542; } .sparkline.green polyline { stroke:#5e8f61; }
+.panel header { display:flex; align-items:center; gap:10px; margin-bottom:16px; }
+.panel h2 { margin:0; font-size:1.05rem; }
+.panel header label { margin-left:auto; color:var(--muted); font-size:.85rem; }
+.panel-icon { color:var(--red); display:flex; }
+.console-toolbar, .command-bar { display:flex; gap:8px; align-items:center; padding:8px 10px; border:1px solid var(--line); border-radius:14px; background:#fff; }
+.console-toolbar input, .command-bar input { flex:1; border:0; outline:0; background:transparent; }
+.console { min-height:190px; max-height:240px; overflow:auto; padding:14px; border-radius:14px; background:#24211e; color:#f8efe3; line-height:1.55; }
+.mc-green { color:#84d982; } .mc-aqua { color:#73d4d6; } .mc-red { color:#e06b6b; } .mc-yellow { color:#e6d278; }
+.tree { display:grid; gap:6px; margin-bottom:10px; }
+.tree button, .task, .timeline, .mod { display:flex; justify-content:space-between; padding:10px 12px; border-radius:12px; background:#f2e6d5; color:var(--ink); }
+textarea { width:100%; min-height:140px; border:1px solid var(--line); border-radius:14px; padding:12px; background:#fffdf9; color:#463b34; font-family:'JetBrains Mono', ui-monospace, monospace; }
+.form-grid { display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:12px; }
+.form-grid label { display:grid; gap:6px; color:var(--muted); }
+select, input[type='number'] { border:1px solid var(--line); border-radius:12px; padding:9px; background:#fff; }
+.toggle, .share-toggle { display:flex !important; align-items:center; justify-content:space-between; flex-direction:row; padding:10px; background:#f2e6d5; border-radius:12px; }
+.muted { margin-top:12px; padding:9px 12px; border-radius:12px; color:var(--red); background:#f4deda; }
+.player { display:grid; grid-template-columns:34px 1fr auto auto auto auto; align-items:center; gap:8px; margin-bottom:8px; }
+.player img { width:34px; height:34px; border-radius:8px; background:#eadfce; }
+.player button, .mod button, .timeline button { padding:7px 9px; border-radius:10px; background:#ead2ce; color:#7b2c2b; }
+.timeline, .task, .mod { margin-bottom:8px; }
+.chips span { padding:8px 10px; border-radius:999px; background:#ead2ce; color:#7b2c2b; }
+.icon-preview { display:grid; place-items:center; width:96px; height:96px; margin-bottom:12px; border-radius:20px; background:repeating-linear-gradient(45deg, #dccfbd, #dccfbd 8px, #f7efe4 8px, #f7efe4 16px); color:#7b2c2b; }
+.motd, .share-url { margin-top:12px; padding:14px; border-radius:14px; background:#24211e; color:#fff5e8; font-family:Minecraftia, monospace; }
+@media (max-width: 1100px) { .app-shell { flex-direction:column; } .sidebar { position:relative; width:auto; height:auto; } .grid.two, .grid.three { grid-template-columns:1fr; } .hero { align-items:flex-start; flex-direction:column; } }
