@@ -77,6 +77,7 @@ def main():
     if not args.ext:
         print("FATAL: no --ext filters provided")
         sys.exit(2)
+    print("env OK: token len=%d repo=%s" % (len(token), repo))
 
     files = collect(args.bundle_dir, args.ext)
     if not files:
