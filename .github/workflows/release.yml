@@ -30,15 +30,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Preflight
-        shell: bash
-        run: |
-          { node --version; npm --version; npx tauri --version; cargo --version; rustc --version; npm ls @tauri-apps/cli --depth=0; } > preflight.log 2>&1
-          cat preflight.log
-
       - name: Install npm dependencies
         shell: bash
         run: npm install
+
+      - name: Preflight
+        shell: bash
+        run: |
+          {
+            node --version || echo "node: FAILED"
+            npm --version || echo "npm: FAILED"
+            npx tauri --version || echo "npx tauri: FAILED"
+            cargo --version || echo "cargo: FAILED"
+            rustc --version || echo "rustc: FAILED"
+            npm ls @tauri-apps/cli --depth=0 || echo "npm ls @tauri-apps/cli: FAILED"
+          } > preflight.log 2>&1
+          cat preflight.log
 
       - name: Generate app icons
         shell: bash
@@ -100,11 +107,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Preflight
-        run: |
-          { node --version; npm --version; npx tauri --version; cargo --version; rustc --version; npm ls @tauri-apps/cli --depth=0; pkg-config --modversion webkit2gtk-4.1; } > preflight.log 2>&1
-          cat preflight.log
-
       - name: Install Ubuntu dependencies
         run: |
           sudo apt-get update
@@ -121,6 +123,19 @@ jobs:
 
       - name: Install npm dependencies
         run: npm install
+
+      - name: Preflight
+        run: |
+          {
+            node --version || echo "node: FAILED"
+            npm --version || echo "npm: FAILED"
+            npx tauri --version || echo "npx tauri: FAILED"
+            cargo --version || echo "cargo: FAILED"
+            rustc --version || echo "rustc: FAILED"
+            npm ls @tauri-apps/cli --depth=0 || echo "npm ls @tauri-apps/cli: FAILED"
+            pkg-config --modversion webkit2gtk-4.1 || echo "webkit2gtk-4.1: FAILED"
+          } > preflight.log 2>&1
+          cat preflight.log
 
       - name: Generate app icons
         run: python3 scripts/make_icons.py
@@ -178,13 +193,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Preflight
-        run: |
-          { node --version; npm --version; npx tauri --version; cargo --version; rustc --version; npm ls @tauri-apps/cli --depth=0; } > preflight.log 2>&1
-          cat preflight.log
-
       - name: Install npm dependencies
         run: npm install
+
+      - name: Preflight
+        run: |
+          {
+            node --version || echo "node: FAILED"
+            npm --version || echo "npm: FAILED"
+            npx tauri --version || echo "npx tauri: FAILED"
+            cargo --version || echo "cargo: FAILED"
+            rustc --version || echo "rustc: FAILED"
+            npm ls @tauri-apps/cli --depth=0 || echo "npm ls @tauri-apps/cli: FAILED"
+          } > preflight.log 2>&1
+          cat preflight.log
 
       - name: Generate app icons
         run: python3 scripts/make_icons.py
