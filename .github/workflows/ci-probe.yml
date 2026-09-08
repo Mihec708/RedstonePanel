@@ -1,0 +1,13 @@
+name: CI probe
+
+# Tiny probe to verify pull_request triggers fire for this repository.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Say hello
+        run: echo "RedstonePanel CI probe OK on ${{ github.ref_name }}"
