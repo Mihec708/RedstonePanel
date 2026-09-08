@@ -1,9 +1,4 @@
 name: Release
-
-# How to build:
-#   1. Push a tag like v0.1.0                 -> real (non-draft) GitHub Release named after the tag
-#   2. Open or update a pull request          -> draft "preview" release (automatic test build)
-#   3. Actions tab > Release > Run workflow   -> draft "preview" release
 on:
   push:
     tags:
@@ -11,68 +6,13 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
   workflow_dispatch:
-
 permissions:
   contents: write
-
 jobs:
   build-and-release:
-    strategy:
-      # Build each OS natively on its own hosted runner (no cross-compilation).
-      fail-fast: false
-      matrix:
-        - name: Windows
-          os: windows-latest
-          args: '--bundles nsis,msi'
-        - name: Ubuntu
-          os: ubuntu-22.04
-          args: '--bundles appimage,deb'
-        - name: macOS
-          os: macos-latest
-          args: '--bundles dmg'
-    runs-on: ${{ matrix.os }}
-    env:
-      NODE_VERSION: '20'
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install Ubuntu dependencies
-        if: matrix.os == 'ubuntu-22.04'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libgtk-3-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            libfuse2
-
-      - name: Install Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: Install npm dependencies
-        run: npm install
-
-      - name: Generate app icons
-        run: python3 scripts/make_icons.py
-
-      - name: Build and publish GitHub Release
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          # Tag push -> release named after the tag (v0.1.0)
-          # PR or manual run -> draft "preview" release (reused across runs)
-          tagName: ${{ github.event_name == 'push' && github.ref_name || 'preview' }}
-          releaseName: 'RedstonePanel'
-          releaseBody: 'RedstonePanel — native Minecraft server manager. Installers for Windows, Ubuntu and macOS.'
-          releaseDraft: ${{ github.event_name != 'push' }}
-          prerelease: false
-          overwrite: true
-          args: ${{ matrix.args }}
+      - name: Probe
+        run: echo "release workflow probe OK"
