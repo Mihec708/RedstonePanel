@@ -8,6 +8,10 @@ name: Release
 # is plain shell + curl/python, because this account has blocked some
 # third-party actions.
 #
+# Publishing: each platform job calls scripts/publish_release.py, which creates
+# the release (or fetches it if a sibling job got there first) and uploads that
+# platform's artifacts. Safe to run in parallel across the three jobs.
+#
 # Diagnostics: if a build step fails, the logs (preflight + frontend + build)
 # are posted to an issue "CI build log (<platform>)" and printed in the job.
 
@@ -83,23 +87,11 @@ jobs:
         shell: bash
         run: |
           set -e
-          if [ "${{ github.event_name }}" = "push" ]; then TAG="${{ github.ref_name }}"; PRERELEASE=false; else TAG="preview"; PRERELEASE=true; fi
-          API="https://api.github.com/repos/${{ github.repository }}"
-          AUTH="Authorization: token $GITHUB_TOKEN"
-          ACPT="Accept: application/vnd.github+json"
-          PAYLOAD=$(python -c 'import json; print(json.dumps({"tag_name":"'"$TAG"'","name":"RedstonePanel","draft":false,"prerelease":'"$PRERELEASE"',"body":"RedstonePanel - native Minecraft server manager. Download the installer for your OS."}))')
-          RESP=$(curl -s -X POST -H "$AUTH" -H "$ACPT" -d "$PAYLOAD" "$API/releases")
-          UPLOAD_URL=$(printf '%s' "$RESP" | python -c 'import sys,json; print(json.load(sys.stdin).get("upload_url","").split("?")[0])')
-          if [ -z "$UPLOAD_URL" ]; then
-            RESP=$(curl -s -H "$AUTH" -H "$ACPT" "$API/releases/tags/$TAG")
-            UPLOAD_URL=$(printf '%s' "$RESP" | python -c 'import sys,json; print(json.load(sys.stdin).get("upload_url","").split("?")[0])')
-          fi
-          if [ -z "$UPLOAD_URL" ]; then echo "FAILED to resolve release upload URL"; echo "$RESP"; exit 1; fi
-          echo "release tag: $TAG"
-          for f in $(find src-tauri/target/release/bundle -type f \( -name "*.exe" -o -name "*.msi" \)); do
-            CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST -H "$AUTH" -H "Content-Type: application/octet-stream" --data-binary "@$f" "$UPLOAD_URL?name=$(basename "$f")")
-            echo "uploaded $(basename "$f") -> http $CODE"
-          done
+          if [ "${{ github.event_name }}" = "push" ]; then TAG="${{ github.ref_name }}"; PRE=""; else TAG="preview"; PRE="--prerelease"; fi
+          echo "Publishing release tag: $TAG"
+          python scripts/publish_release.py --tag "$TAG" $PRE \
+            --bundle-dir src-tauri/target/release/bundle \
+            --ext .exe --ext .msi
 
   build-ubuntu:
     runs-on: ubuntu-latest
@@ -169,23 +161,11 @@ jobs:
       - name: Publish release
         run: |
           set -e
-          if [ "${{ github.event_name }}" = "push" ]; then TAG="${{ github.ref_name }}"; PRERELEASE=false; else TAG="preview"; PRERELEASE=true; fi
-          API="https://api.github.com/repos/${{ github.repository }}"
-          AUTH="Authorization: token $GITHUB_TOKEN"
-          ACPT="Accept: application/vnd.github+json"
-          PAYLOAD=$(python3 -c 'import json; print(json.dumps({"tag_name":"'"$TAG"'","name":"RedstonePanel","draft":false,"prerelease":'"$PRERELEASE"',"body":"RedstonePanel - native Minecraft server manager. Download the installer for your OS."}))')
-          RESP=$(curl -s -X POST -H "$AUTH" -H "$ACPT" -d "$PAYLOAD" "$API/releases")
-          UPLOAD_URL=$(printf '%s' "$RESP" | python3 -c 'import sys,json; print(json.load(sys.stdin).get("upload_url","").split("?")[0])')
-          if [ -z "$UPLOAD_URL" ]; then
-            RESP=$(curl -s -H "$AUTH" -H "$ACPT" "$API/releases/tags/$TAG")
-            UPLOAD_URL=$(printf '%s' "$RESP" | python3 -c 'import sys,json; print(json.load(sys.stdin).get("upload_url","").split("?")[0])')
-          fi
-          if [ -z "$UPLOAD_URL" ]; then echo "FAILED to resolve release upload URL"; echo "$RESP"; exit 1; fi
-          echo "release tag: $TAG"
-          for f in $(find src-tauri/target/release/bundle -type f \( -name "*.AppImage" -o -name "*.deb" \)); do
-            CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST -H "$AUTH" -H "Content-Type: application/octet-stream" --data-binary "@$f" "$UPLOAD_URL?name=$(basename "$f")")
-            echo "uploaded $(basename "$f") -> http $CODE"
-          done
+          if [ "${{ github.event_name }}" = "push" ]; then TAG="${{ github.ref_name }}"; PRE=""; else TAG="preview"; PRE="--prerelease"; fi
+          echo "Publishing release tag: $TAG"
+          python3 scripts/publish_release.py --tag "$TAG" $PRE \
+            --bundle-dir src-tauri/target/release/bundle \
+            --ext .AppImage --ext .deb
 
   build-macos:
     runs-on: macos-latest
@@ -240,20 +220,8 @@ jobs:
       - name: Publish release
         run: |
           set -e
-          if [ "${{ github.event_name }}" = "push" ]; then TAG="${{ github.ref_name }}"; PRERELEASE=false; else TAG="preview"; PRERELEASE=true; fi
-          API="https://api.github.com/repos/${{ github.repository }}"
-          AUTH="Authorization: token $GITHUB_TOKEN"
-          ACPT="Accept: application/vnd.github+json"
-          PAYLOAD=$(python3 -c 'import json; print(json.dumps({"tag_name":"'"$TAG"'","name":"RedstonePanel","draft":false,"prerelease":'"$PRERELEASE"',"body":"RedstonePanel - native Minecraft server manager. Download the installer for your OS."}))')
-          RESP=$(curl -s -X POST -H "$AUTH" -H "$ACPT" -d "$PAYLOAD" "$API/releases")
-          UPLOAD_URL=$(printf '%s' "$RESP" | python3 -c 'import sys,json; print(json.load(sys.stdin).get("upload_url","").split("?")[0])')
-          if [ -z "$UPLOAD_URL" ]; then
-            RESP=$(curl -s -H "$AUTH" -H "$ACPT" "$API/releases/tags/$TAG")
-            UPLOAD_URL=$(printf '%s' "$RESP" | python3 -c 'import sys,json; print(json.load(sys.stdin).get("upload_url","").split("?")[0])')
-          fi
-          if [ -z "$UPLOAD_URL" ]; then echo "FAILED to resolve release upload URL"; echo "$RESP"; exit 1; fi
-          echo "release tag: $TAG"
-          for f in $(find src-tauri/target/release/bundle -type f -name "*.dmg"); do
-            CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST -H "$AUTH" -H "Content-Type: application/octet-stream" --data-binary "@$f" "$UPLOAD_URL?name=$(basename "$f")")
-            echo "uploaded $(basename "$f") -> http $CODE"
-          done
+          if [ "${{ github.event_name }}" = "push" ]; then TAG="${{ github.ref_name }}"; PRE=""; else TAG="preview"; PRE="--prerelease"; fi
+          echo "Publishing release tag: $TAG"
+          python3 scripts/publish_release.py --tag "$TAG" $PRE \
+            --bundle-dir src-tauri/target/release/bundle \
+            --ext .dmg
