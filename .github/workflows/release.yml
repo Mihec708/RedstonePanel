@@ -26,10 +26,19 @@ on:
 permissions:
   contents: write
   issues: write
+  pull-requests: write
+  repository-projects: write
+  metadata: write
 
 jobs:
   build-windows:
     runs-on: windows-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      repository-projects: write
+      issues: write
+      metadata: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -89,9 +98,15 @@ jobs:
 
       - name: Publish release
         shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set +e
           echo "::notice title=RedstonePanel-publish::windows step started bash=$BASH_VERSION"
+          if [ -z "${GITHUB_TOKEN:-}" ]; then
+            export GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}"
+            echo "::notice title=RedstonePanel-publish::windows token re-injected from secrets context len=${#GITHUB_TOKEN}"
+          fi
           PYTHON=python
           if [ ! -f scripts/publish_release.py ]; then
             echo "::error title=RedstonePanel-publish-diag::windows scripts/publish_release.py MISSING; pwd=$(pwd)"
@@ -126,6 +141,12 @@ jobs:
 
   build-ubuntu:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      repository-projects: write
+      issues: write
+      metadata: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -193,9 +214,15 @@ jobs:
         run: echo "::notice title=RedstonePanel-marker::ubuntu reached publish phase bash=$BASH_VERSION"
 
       - name: Publish release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set +e
           echo "::notice title=RedstonePanel-publish::ubuntu step started bash=$BASH_VERSION"
+          if [ -z "${GITHUB_TOKEN:-}" ]; then
+            export GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}"
+            echo "::notice title=RedstonePanel-publish::ubuntu token re-injected from secrets context len=${#GITHUB_TOKEN}"
+          fi
           PYTHON=python3
           if [ ! -f scripts/publish_release.py ]; then
             echo "::error title=RedstonePanel-publish-diag::ubuntu scripts/publish_release.py MISSING; pwd=$(pwd)"
@@ -230,6 +257,12 @@ jobs:
 
   build-macos:
     runs-on: macos-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      repository-projects: write
+      issues: write
+      metadata: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -282,9 +315,15 @@ jobs:
         run: echo "::notice title=RedstonePanel-marker::macos reached publish phase bash=$BASH_VERSION"
 
       - name: Publish release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set +e
           echo "::notice title=RedstonePanel-publish::macos step started bash=$BASH_VERSION"
+          if [ -z "${GITHUB_TOKEN:-}" ]; then
+            export GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}"
+            echo "::notice title=RedstonePanel-publish::macos token re-injected from secrets context len=${#GITHUB_TOKEN}"
+          fi
           PYTHON=python3
           if [ ! -f scripts/publish_release.py ]; then
             echo "::error title=RedstonePanel-publish-diag::macos scripts/publish_release.py MISSING; pwd=$(pwd)"
