@@ -8,12 +8,13 @@ name: Release
 # is plain shell + curl/python, because this account has blocked some
 # third-party actions.
 #
-# Publishing: each platform job calls scripts/publish_release.py, which creates
-# the release (or fetches it if a sibling job got there first) and uploads that
-# platform's artifacts. Safe to run in parallel across the three jobs.
+# Publishing: each platform job uses the `gh` CLI (preinstalled on all
+# runners, verified working in the upload-test matrix) to create the release
+# (or reuse it if a sibling job got there first) and upload that platform's
+# artifacts. Safe to run in parallel across the three jobs.
 #
 # Diagnostics: the publish phase emits check-run annotations (always readable,
-# no write permission needed) plus a paste.rs URL and, best-effort, an issue.
+# no write permission needed) so failures are visible without CI logs.
 
 on:
   pull_request:
@@ -100,42 +101,37 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set +e
-          echo "::notice title=RedstonePanel-publish::windows step started bash=$BASH_VERSION"
           if [ -z "${GITHUB_TOKEN:-}" ]; then
             export GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}"
             echo "::notice title=RedstonePanel-publish::windows token re-injected from secrets context len=${#GITHUB_TOKEN}"
           fi
-          PYTHON=python
-          if [ ! -f scripts/publish_release.py ]; then
-            echo "::error title=RedstonePanel-publish-diag::windows scripts/publish_release.py MISSING; pwd=$(pwd)"
+          echo "::notice title=RedstonePanel-publish::windows step started bash=$BASH_VERSION token_len=${#GITHUB_TOKEN}"
+          if [ -z "$GITHUB_TOKEN" ]; then
+            echo "::error title=RedstonePanel-publish-diag::windows NO TOKEN (env and secrets context both empty)"
             exit 2
           fi
-          TOKEN_STATE=missing
-          [ -n "$GITHUB_TOKEN" ] && TOKEN_STATE=set
-          REPO=${GITHUB_REPOSITORY:-MISSING}
-          echo "::notice title=RedstonePanel-publish::windows pre-check python=$(command -v $PYTHON || echo NOTFOUND) token=$TOKEN_STATE repo=$REPO"
-          if [ "${{ github.event_name }}" = "push" ]; then TAG="${{ github.ref_name }}"; PRE=""; else TAG="preview"; PRE="--prerelease"; fi
-          echo "Publishing release tag: $TAG"
-          $PYTHON scripts/publish_release.py --tag "$TAG" $PRE --bundle-dir src-tauri/target/release/bundle --ext .exe --ext .msi > publish_diag.txt 2>&1
+          if [ "${{ github.event_name }}" = "push" ]; then TAG="${{ github.ref_name }}"; PRERELEASE=""; else TAG="preview"; PRERELEASE="--prerelease"; fi
+          BUNDLE=src-tauri/target/release/bundle
+          FILES=$(find "$BUNDLE" -type f \( -name '*.exe' -o -name '*.msi' \) 2>/dev/null)
+          echo "::notice title=RedstonePanel-publish::windows tag=$TAG files=$(echo $FILES | tr '\n' ' ')"
+          if [ -z "$FILES" ]; then
+            echo "::error title=RedstonePanel-publish-diag::windows no .exe/.msi artifacts under $BUNDLE"
+            exit 3
+          fi
+          if ! gh release view "$TAG" > /dev/null 2>&1; then
+            gh release create "$TAG" $PRERELEASE --title "RedstonePanel" \
+              --notes "RedstonePanel - native Minecraft server manager. Download the build for your OS." > gh_create.txt 2>&1
+            echo "gh release create RC=$? $(tail -n 2 gh_create.txt)"
+          fi
+          gh release upload "$TAG" $FILES --clobber > gh_upload.txt 2>&1
           RC=$?
-          echo "::notice title=RedstonePanel-publish::windows publish script finished RC=$RC"
+          echo "::notice title=RedstonePanel-publish::windows gh release upload RC=$RC"
           if [ $RC -ne 0 ]; then
-            {
-              echo "PUBLISH FAILED RC=$RC"
-              echo "token: $([ -n "$GITHUB_TOKEN" ] && echo set || echo MISSING) repo=${GITHUB_REPOSITORY:-MISSING}"
-              echo "python: $(command -v $PYTHON || echo MISSING) $($PYTHON --version 2>&1)"
-              echo "scripts dir: $(ls -la scripts 2>&1 | tr '\n' ' ')"
-              echo "--- publish output ---"
-              cat publish_diag.txt
-            } >> publish_diag.txt 2>&1
-            PASTE_URL=$(curl -s -m 30 -X POST --data-binary @publish_diag.txt https://paste.rs/ 2>/dev/null || echo "paste-unavailable")
-            echo "PASTE_URL=$PASTE_URL" >> publish_diag.txt
-            $PYTHON scripts/post_diag.py publish publish_diag.txt 2>&1 | tee -a publish_diag.txt
-            echo "::error title=RedstonePanel-publish-diag::windows RC=$RC PASTE=$PASTE_URL first=$(grep -m1 -E 'FATAL|HTTP [45][0-9][0-9]' publish_diag.txt)"
-            cat publish_diag.txt
+            echo "::error title=RedstonePanel-publish-diag::windows RC=$RC $(tail -n 3 gh_upload.txt | tr '\n' ' ')"
+            cat gh_upload.txt
             exit $RC
           fi
-          cat publish_diag.txt
+          tail -n 5 gh_upload.txt
 
   build-ubuntu:
     runs-on: ubuntu-latest
@@ -215,42 +211,37 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set +e
-          echo "::notice title=RedstonePanel-publish::ubuntu step started bash=$BASH_VERSION"
           if [ -z "${GITHUB_TOKEN:-}" ]; then
             export GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}"
             echo "::notice title=RedstonePanel-publish::ubuntu token re-injected from secrets context len=${#GITHUB_TOKEN}"
           fi
-          PYTHON=python3
-          if [ ! -f scripts/publish_release.py ]; then
-            echo "::error title=RedstonePanel-publish-diag::ubuntu scripts/publish_release.py MISSING; pwd=$(pwd)"
+          echo "::notice title=RedstonePanel-publish::ubuntu step started bash=$BASH_VERSION token_len=${#GITHUB_TOKEN}"
+          if [ -z "$GITHUB_TOKEN" ]; then
+            echo "::error title=RedstonePanel-publish-diag::ubuntu NO TOKEN (env and secrets context both empty)"
             exit 2
           fi
-          TOKEN_STATE=missing
-          [ -n "$GITHUB_TOKEN" ] && TOKEN_STATE=set
-          REPO=${GITHUB_REPOSITORY:-MISSING}
-          echo "::notice title=RedstonePanel-publish::ubuntu pre-check python=$(command -v $PYTHON || echo NOTFOUND) token=$TOKEN_STATE repo=$REPO"
-          if [ "${{ github.event_name }}" = "push" ]; then TAG="${{ github.ref_name }}"; PRE=""; else TAG="preview"; PRE="--prerelease"; fi
-          echo "Publishing release tag: $TAG"
-          $PYTHON scripts/publish_release.py --tag "$TAG" $PRE --bundle-dir src-tauri/target/release/bundle --ext .AppImage --ext .deb > publish_diag.txt 2>&1
+          if [ "${{ github.event_name }}" = "push" ]; then TAG="${{ github.ref_name }}"; PRERELEASE=""; else TAG="preview"; PRERELEASE="--prerelease"; fi
+          BUNDLE=src-tauri/target/release/bundle
+          FILES=$(find "$BUNDLE" -type f \( -name '*.AppImage' -o -name '*.deb' \) 2>/dev/null)
+          echo "::notice title=RedstonePanel-publish::ubuntu tag=$TAG files=$(echo $FILES | tr '\n' ' ')"
+          if [ -z "$FILES" ]; then
+            echo "::error title=RedstonePanel-publish-diag::ubuntu no .AppImage/.deb artifacts under $BUNDLE"
+            exit 3
+          fi
+          if ! gh release view "$TAG" > /dev/null 2>&1; then
+            gh release create "$TAG" $PRERELEASE --title "RedstonePanel" \
+              --notes "RedstonePanel - native Minecraft server manager. Download the build for your OS." > gh_create.txt 2>&1
+            echo "gh release create RC=$? $(tail -n 2 gh_create.txt)"
+          fi
+          gh release upload "$TAG" $FILES --clobber > gh_upload.txt 2>&1
           RC=$?
-          echo "::notice title=RedstonePanel-publish::ubuntu publish script finished RC=$RC"
+          echo "::notice title=RedstonePanel-publish::ubuntu gh release upload RC=$RC"
           if [ $RC -ne 0 ]; then
-            {
-              echo "PUBLISH FAILED RC=$RC"
-              echo "token: $([ -n "$GITHUB_TOKEN" ] && echo set || echo MISSING) repo=${GITHUB_REPOSITORY:-MISSING}"
-              echo "python: $(command -v $PYTHON || echo MISSING) $($PYTHON --version 2>&1)"
-              echo "scripts dir: $(ls -la scripts 2>&1 | tr '\n' ' ')"
-              echo "--- publish output ---"
-              cat publish_diag.txt
-            } >> publish_diag.txt 2>&1
-            PASTE_URL=$(curl -s -m 30 -X POST --data-binary @publish_diag.txt https://paste.rs/ 2>/dev/null || echo "paste-unavailable")
-            echo "PASTE_URL=$PASTE_URL" >> publish_diag.txt
-            $PYTHON scripts/post_diag.py publish publish_diag.txt 2>&1 | tee -a publish_diag.txt
-            echo "::error title=RedstonePanel-publish-diag::ubuntu RC=$RC PASTE=$PASTE_URL first=$(grep -m1 -E 'FATAL|HTTP [45][0-9][0-9]' publish_diag.txt)"
-            cat publish_diag.txt
+            echo "::error title=RedstonePanel-publish-diag::ubuntu RC=$RC $(tail -n 3 gh_upload.txt | tr '\n' ' ')"
+            cat gh_upload.txt
             exit $RC
           fi
-          cat publish_diag.txt
+          tail -n 5 gh_upload.txt
 
   build-macos:
     runs-on: macos-latest
@@ -315,39 +306,34 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set +e
-          echo "::notice title=RedstonePanel-publish::macos step started bash=$BASH_VERSION"
           if [ -z "${GITHUB_TOKEN:-}" ]; then
             export GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}"
             echo "::notice title=RedstonePanel-publish::macos token re-injected from secrets context len=${#GITHUB_TOKEN}"
           fi
-          PYTHON=python3
-          if [ ! -f scripts/publish_release.py ]; then
-            echo "::error title=RedstonePanel-publish-diag::macos scripts/publish_release.py MISSING; pwd=$(pwd)"
+          echo "::notice title=RedstonePanel-publish::macos step started bash=$BASH_VERSION token_len=${#GITHUB_TOKEN}"
+          if [ -z "$GITHUB_TOKEN" ]; then
+            echo "::error title=RedstonePanel-publish-diag::macos NO TOKEN (env and secrets context both empty)"
             exit 2
           fi
-          TOKEN_STATE=missing
-          [ -n "$GITHUB_TOKEN" ] && TOKEN_STATE=set
-          REPO=${GITHUB_REPOSITORY:-MISSING}
-          echo "::notice title=RedstonePanel-publish::macos pre-check python=$(command -v $PYTHON || echo NOTFOUND) token=$TOKEN_STATE repo=$REPO"
-          if [ "${{ github.event_name }}" = "push" ]; then TAG="${{ github.ref_name }}"; PRE=""; else TAG="preview"; PRE="--prerelease"; fi
-          echo "Publishing release tag: $TAG"
-          $PYTHON scripts/publish_release.py --tag "$TAG" $PRE --bundle-dir src-tauri/target/release/bundle --ext .dmg > publish_diag.txt 2>&1
+          if [ "${{ github.event_name }}" = "push" ]; then TAG="${{ github.ref_name }}"; PRERELEASE=""; else TAG="preview"; PRERELEASE="--prerelease"; fi
+          BUNDLE=src-tauri/target/release/bundle
+          FILES=$(find "$BUNDLE" -type f -name '*.dmg' 2>/dev/null)
+          echo "::notice title=RedstonePanel-publish::macos tag=$TAG files=$(echo $FILES | tr '\n' ' ')"
+          if [ -z "$FILES" ]; then
+            echo "::error title=RedstonePanel-publish-diag::macos no .dmg artifact under $BUNDLE"
+            exit 3
+          fi
+          if ! gh release view "$TAG" > /dev/null 2>&1; then
+            gh release create "$TAG" $PRERELEASE --title "RedstonePanel" \
+              --notes "RedstonePanel - native Minecraft server manager. Download the build for your OS." > gh_create.txt 2>&1
+            echo "gh release create RC=$? $(tail -n 2 gh_create.txt)"
+          fi
+          gh release upload "$TAG" $FILES --clobber > gh_upload.txt 2>&1
           RC=$?
-          echo "::notice title=RedstonePanel-publish::macos publish script finished RC=$RC"
+          echo "::notice title=RedstonePanel-publish::macos gh release upload RC=$RC"
           if [ $RC -ne 0 ]; then
-            {
-              echo "PUBLISH FAILED RC=$RC"
-              echo "token: $([ -n "$GITHUB_TOKEN" ] && echo set || echo MISSING) repo=${GITHUB_REPOSITORY:-MISSING}"
-              echo "python: $(command -v $PYTHON || echo MISSING) $($PYTHON --version 2>&1)"
-              echo "scripts dir: $(ls -la scripts 2>&1 | tr '\n' ' ')"
-              echo "--- publish output ---"
-              cat publish_diag.txt
-            } >> publish_diag.txt 2>&1
-            PASTE_URL=$(curl -s -m 30 -X POST --data-binary @publish_diag.txt https://paste.rs/ 2>/dev/null || echo "paste-unavailable")
-            echo "PASTE_URL=$PASTE_URL" >> publish_diag.txt
-            $PYTHON scripts/post_diag.py publish publish_diag.txt 2>&1 | tee -a publish_diag.txt
-            echo "::error title=RedstonePanel-publish-diag::macos RC=$RC PASTE=$PASTE_URL first=$(grep -m1 -E 'FATAL|HTTP [45][0-9][0-9]' publish_diag.txt)"
-            cat publish_diag.txt
+            echo "::error title=RedstonePanel-publish-diag::macos RC=$RC $(tail -n 3 gh_upload.txt | tr '\n' ' ')"
+            cat gh_upload.txt
             exit $RC
           fi
-          cat publish_diag.txt
+          tail -n 5 gh_upload.txt
