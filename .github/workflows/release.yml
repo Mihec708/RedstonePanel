@@ -1,55 +1,15 @@
 name: Release
-# Trigger rules:
-#   - tag push (v*)            -> real GitHub Release with that tag
-#   - PR update / manual run   -> DRAFT 'preview' release (safe to test)
+# Diagnostic round: ubuntu-only, no third-party actions, self-reporting via PR comments.
 on:
   pull_request:
     types: [opened, synchronize, reopened]
   workflow_dispatch:
-  push:
-    tags:
-      - 'v*'
 
 permissions:
   contents: write
-
-env:
-  NODE_VERSION: '20'
+  issues: write
 
 jobs:
-  build-windows:
-    runs-on: windows-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: Install npm dependencies
-        run: npm install
-
-      - name: Generate app icons
-        run: python scripts/make_icons.py
-
-      - name: Build Windows installers and publish
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tagName: ${{ github.event_name == 'push' && github.ref_name || 'preview' }}
-          releaseName: 'RedstonePanel'
-          releaseBody: 'RedstonePanel - native Minecraft server manager. Installers for Windows, Ubuntu and macOS.'
-          releaseDraft: ${{ github.event_name != 'push' }}
-          prerelease: false
-          overwrite: true
-          args: '--bundles nsis,msi'
-
   build-ubuntu:
     runs-on: ubuntu-latest
     steps:
@@ -69,63 +29,60 @@ jobs:
             libssl-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev
+      - name: diag-apt
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -n "${{ github.event.number }}" ]; then
+            curl -s -o /dev/null -X POST -H "Authorization: token $GH_TOKEN" -H "Accept: application/vnd.github+json" -d '{"body":"[diag] apt dependencies OK"}' "https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.number }}/comments"
+          fi
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
+      - name: Check preinstalled toolchain
+        run: |
+          rustc --version
+          cargo --version
+          node --version
+          npm --version
+          python3 --version
+      - name: diag-toolchain
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -n "${{ github.event.number }}" ]; then
+            curl -s -o /dev/null -X POST -H "Authorization: token $GH_TOKEN" -H "Accept: application/vnd.github+json" -d '{"body":"[diag] preinstalled toolchain OK (rustc/cargo/node/npm/python3)"}' "https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.number }}/comments"
+          fi
 
       - name: Install npm dependencies
         run: npm install
+      - name: diag-npm
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -n "${{ github.event.number }}" ]; then
+            curl -s -o /dev/null -X POST -H "Authorization: token $GH_TOKEN" -H "Accept: application/vnd.github+json" -d '{"body":"[diag] npm install OK"}' "https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.number }}/comments"
+          fi
 
       - name: Generate app icons
         run: python3 scripts/make_icons.py
-
-      - name: Build Ubuntu packages and publish
-        uses: tauri-apps/tauri-action@v0
+      - name: diag-icons
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tagName: ${{ github.event_name == 'push' && github.ref_name || 'preview' }}
-          releaseName: 'RedstonePanel'
-          releaseBody: 'RedstonePanel - native Minecraft server manager. Installers for Windows, Ubuntu and macOS.'
-          releaseDraft: ${{ github.event_name != 'push' }}
-          prerelease: false
-          overwrite: true
-          args: '--bundles appimage,deb'
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -n "${{ github.event.number }}" ]; then
+            curl -s -o /dev/null -X POST -H "Authorization: token $GH_TOKEN" -H "Accept: application/vnd.github+json" -d '{"body":"[diag] icons generated OK"}' "https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.number }}/comments"
+          fi
 
-  build-macos:
-    runs-on: macos-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: Install npm dependencies
-        run: npm install
-
-      - name: Generate app icons
-        run: python3 scripts/make_icons.py
-
-      - name: Build macOS DMG and publish
-        uses: tauri-apps/tauri-action@v0
+      - name: Build frontend
+        run: npm run build
+      - name: diag-frontend
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tagName: ${{ github.event_name == 'push' && github.ref_name || 'preview' }}
-          releaseName: 'RedstonePanel'
-          releaseBody: 'RedstonePanel - native Minecraft server manager. Installers for Windows, Ubuntu and macOS.'
-          releaseDraft: ${{ github.event_name != 'push' }}
-          prerelease: false
-          overwrite: true
-          args: '--bundles dmg'
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -n "${{ github.event.number }}" ]; then
+            curl -s -o /dev/null -X POST -H "Authorization: token $GH_TOKEN" -H "Accept: application/vnd.github+json" -d '{"body":"[diag] frontend build OK"}' "https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.number }}/comments"
+          fi
+
+      - name: Show artifacts
+        run: |
+          ls -la src-tauri/icons
+          ls -la dist
