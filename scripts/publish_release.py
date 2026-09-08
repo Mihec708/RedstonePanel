@@ -7,6 +7,10 @@ creates the release, the others fetch it (with retries to cover the small race
 window). Uses only the Python standard library so it works on Windows, Linux
 and macOS runners without extra dependencies.
 
+Upload form: raw file bytes as the request body with
+Content-Type: application/octet-stream and an explicit Content-Length header.
+Before uploading, any existing asset with the same filename is deleted first.
+
 Environment (provided by GitHub Actions):
   GITHUB_TOKEN        access token (needs `contents: write`)
   GITHUB_REPOSITORY   "owner/name"
@@ -22,7 +26,6 @@ import sys
 import time
 import urllib.error
 import urllib.request
-import uuid
 
 API = "https://api.github.com"
 
@@ -37,9 +40,11 @@ def http(method, url, token, payload=None, raw=None, content_type=None):
     if payload is not None:
         data = json.dumps(payload).encode("utf-8")
         headers["Content-Type"] = "application/json"
+        headers["Content-Length"] = str(len(data))
     if raw is not None:
         data = raw
         headers["Content-Type"] = content_type or "application/octet-stream"
+        headers["Content-Length"] = str(len(raw))
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
         with urllib.request.urlopen(req, timeout=300) as resp:
@@ -131,62 +136,56 @@ def main():
         sys.exit(4)
 
     # 3) Upload each artifact.
-    #    GitHub's upload endpoint rejected a raw octet-stream body with
-    #    HTTP 400 {"message":"Multipart form data required"}, so the primary
-    #    path builds a proper multipart/form-data body (a single 'file' part).
-    #    If that ever fails with 400, fall back to the raw octet-stream form.
+    #    Upload form: raw file bytes as the request body with
+    #    Content-Type: application/octet-stream and an explicit
+    #    Content-Length matching the exact byte size of the file.
+    #    No multipart wrapping: GitHub's Release Asset Upload API does not
+    #    accept multipart/form-data here (it returns "Bad Size" when the
+    #    multipart framing confuses the server-side size check).
+    #    Before uploading, any existing asset with the exact same filename
+    #    on the release is deleted first to avoid naming conflicts.
+
+    def delete_existing_asset(name):
+        st, lb = http(
+            "GET",
+            API + "/repos/" + repo + "/releases/tags/" + args.tag + "/assets",
+            token,
+        )
+        if st != 200:
+            print("asset-list check -> HTTP %s (continuing)" % st)
+            return
+        try:
+            assets = json.loads(lb)
+        except Exception:
+            return
+        for a in assets:
+            if a.get("name") == name and a.get("url"):
+                d_st, d_b = http("DELETE", a["url"], token)
+                print("deleted existing asset %s -> HTTP %s" % (name, d_st))
 
     def upload(name, raw, base_upload_url):
-        boundary = "----redstonepanel" + uuid.uuid4().hex
-        head = (
-            "--%s\r\n"
-            'Content-Disposition: form-data; name="file"; filename="%s"\r\n'
-            "Content-Type: application/octet-stream\r\n"
-            "\r\n"
-        ) % (boundary, name)
-        tail = "\r\n--%s--\r\n" % boundary
-        mp = head.encode("utf-8") + raw + tail.encode("utf-8")
         status, body = http(
             "POST", base_upload_url + "?name=" + name, token,
-            raw=mp,
-            content_type="multipart/form-data; boundary=" + boundary,
+            raw=raw,
+            content_type="application/octet-stream",
         )
-        if status == 400:
-            status, body = http(
-                "POST", base_upload_url + "?name=" + name, token,
-                raw=raw, content_type="application/octet-stream",
-            )
-            return status, body, "octet-stream-fallback"
-        return status, body, "multipart"
+        return status, body
 
     for path in files:
         name = os.path.basename(path)
         with open(path, "rb") as fh:
             raw = fh.read()
-        status, body, mode = upload(name, raw, upload_url)
-        print("uploaded %s (%d bytes, %s) -> HTTP %s" % (name, len(raw), mode, status))
-        if status == 422:
-            # A same-named asset already exists (leftover from a previous run):
-            # delete it, then retry once.
-            st, lb = http(
-                "GET",
-                API + "/repos/" + repo + "/releases/tags/" + args.tag + "/assets",
-                token,
-            )
-            deleted = False
-            if st == 200:
-                try:
-                    for a in json.loads(lb):
-                        if a.get("name") == name and a.get("url"):
-                            d_st, d_b = http("DELETE", a["url"], token)
-                            print("deleted stale asset %s -> HTTP %s" % (name, d_st))
-                            deleted = True
-                except Exception:
-                    pass
-            if deleted:
-                status, body, mode = upload(name, raw, upload_url)
-                print("re-uploaded %s (%d bytes, %s) -> HTTP %s"
-                      % (name, len(raw), mode, status))
+        print("uploading %s (%d bytes, Content-Length=%d, octet-stream)"
+              % (name, len(raw), len(raw)))
+        delete_existing_asset(name)
+        status, body = upload(name, raw, upload_url)
+        print("uploaded %s (%d bytes) -> HTTP %s" % (name, len(raw), status))
+        if status not in (200, 201):
+            # One retry: re-delete any same-named asset and upload again.
+            print("retrying %s after HTTP %s" % (name, status))
+            delete_existing_asset(name)
+            status, body = upload(name, raw, upload_url)
+            print("re-uploaded %s (%d bytes) -> HTTP %s" % (name, len(raw), status))
         if status not in (200, 201):
             print("FATAL: upload of %s failed: %s" % (name, body[:400]))
             sys.exit(5)
