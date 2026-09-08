@@ -12,11 +12,8 @@ name: Release
 # the release (or fetches it if a sibling job got there first) and uploads that
 # platform's artifacts. Safe to run in parallel across the three jobs.
 #
-# Diagnostics (if the publish step fails), in order of preference:
-#   1. check-run annotation (always visible, no write permission needed)
-#   2. paste.rs public URL (no auth needed to read)
-#   3. reusable issue "CI build log (publish)" (needs issues: write)
-#   4. job console
+# Diagnostics: the publish phase emits check-run annotations (always readable,
+# no write permission needed) plus a paste.rs URL and, best-effort, an issue.
 
 on:
   pull_request:
@@ -86,38 +83,37 @@ jobs:
             exit 1
           fi
 
+      - name: Publish marker
+        shell: bash
+        run: echo "::notice title=RedstonePanel-marker::windows reached publish phase bash=$BASH_VERSION"
+
       - name: Publish release
         shell: bash
         run: |
+          echo "::notice title=RedstonePanel-publish::windows step started bash=$BASH_VERSION pwd=$(pwd)"
           PYTHON=python
+          if [ ! -f scripts/publish_release.py ]; then
+            echo "::error title=RedstonePanel-publish-diag::scripts/publish_release.py MISSING; pwd=$(pwd); ls=$(ls -la 2>&1 | head -20 | tr '\n' ' ')"
+            exit 2
+          fi
           if [ "${{ github.event_name }}" = "push" ]; then TAG="${{ github.ref_name }}"; PRE=""; else TAG="preview"; PRE="--prerelease"; fi
-          echo "Publishing release tag: $TAG (event: ${{ github.event_name }}, ref: ${{ github.ref }})"
-          $PYTHON scripts/publish_release.py --tag "$TAG" $PRE \
-            --bundle-dir src-tauri/target/release/bundle \
-            --ext .exe --ext .msi > publish_diag.txt 2>&1
+          echo "Publishing release tag: $TAG"
+          $PYTHON scripts/publish_release.py --tag "$TAG" $PRE --bundle-dir src-tauri/target/release/bundle --ext .exe --ext .msi > publish_diag.txt 2>&1
           RC=$?
+          echo "::notice title=RedstonePanel-publish::windows publish script finished RC=$RC"
           if [ $RC -ne 0 ]; then
             {
-              echo
-              echo "===== PUBLISH FAILED (exit $RC) - diagnostics ====="
-              echo "event: ${{ github.event_name }} | ref: ${{ github.ref }} | ref_name: ${{ github.ref_name }}"
-              echo "GITHUB_TOKEN: $([ -n "$GITHUB_TOKEN" ] && echo "set (len ${#GITHUB_TOKEN})" || echo NOT SET)"
-              echo "GITHUB_REPOSITORY: ${GITHUB_REPOSITORY:-NOT SET}"
-              echo "GITHUB_API_URL: ${GITHUB_API_URL:-unset}"
-              echo "cwd: $(pwd)"
-              echo "scripts dir:"; ls -la scripts 2>&1
-              echo "python: $($PYTHON --version 2>&1) at $(command -v $PYTHON 2>&1 || echo NOT FOUND)"
-              echo "===== token self-test ====="
-              $PYTHON scripts/token_selftest.py 2>&1
-              echo "===== publish script output ====="
+              echo "PUBLISH FAILED RC=$RC"
+              echo "token: $([ -n "$GITHUB_TOKEN" ] && echo set || echo MISSING) repo=${GITHUB_REPOSITORY:-MISSING}"
+              echo "python: $(command -v $PYTHON || echo MISSING) $($PYTHON --version 2>&1)"
+              echo "scripts dir: $(ls -la scripts 2>&1 | tr '\n' ' ')"
+              echo "--- publish output ---"
               cat publish_diag.txt
             } >> publish_diag.txt 2>&1
             PASTE_URL=$(curl -s -m 30 -X POST --data-binary @publish_diag.txt https://paste.rs/ 2>/dev/null || echo "paste-unavailable")
-            echo "DIAGNOSTIC PASTE URL: $PASTE_URL" >> publish_diag.txt
-            $PYTHON scripts/post_diag.py publish publish_diag.txt || echo "WARNING: could not post diagnostics to issue"
-            FIRST_FAIL=$(grep -m1 -E "FATAL|HTTP [45][0-9][0-9]" publish_diag.txt || echo "no FATAL/HTTP line found")
-            echo "::error title=RedstonePanel-publish-diag::RC=$RC | PASTE_URL=$PASTE_URL | $FIRST_FAIL"
-            echo "===== console copy of diagnostics ====="
+            echo "PASTE_URL=$PASTE_URL" >> publish_diag.txt
+            $PYTHON scripts/post_diag.py publish publish_diag.txt 2>&1 | tee -a publish_diag.txt
+            echo "::error title=RedstonePanel-publish-diag::windows RC=$RC PASTE=$PASTE_URL first=$(grep -m1 -E 'FATAL|HTTP [45][0-9][0-9]' publish_diag.txt)"
             cat publish_diag.txt
             exit $RC
           fi
@@ -188,37 +184,35 @@ jobs:
             exit 1
           fi
 
+      - name: Publish marker
+        run: echo "::notice title=RedstonePanel-marker::ubuntu reached publish phase bash=$BASH_VERSION"
+
       - name: Publish release
         run: |
+          echo "::notice title=RedstonePanel-publish::ubuntu step started bash=$BASH_VERSION pwd=$(pwd)"
           PYTHON=python3
+          if [ ! -f scripts/publish_release.py ]; then
+            echo "::error title=RedstonePanel-publish-diag::scripts/publish_release.py MISSING; pwd=$(pwd); ls=$(ls -la 2>&1 | head -20 | tr '\n' ' ')"
+            exit 2
+          fi
           if [ "${{ github.event_name }}" = "push" ]; then TAG="${{ github.ref_name }}"; PRE=""; else TAG="preview"; PRE="--prerelease"; fi
-          echo "Publishing release tag: $TAG (event: ${{ github.event_name }}, ref: ${{ github.ref }})"
-          $PYTHON scripts/publish_release.py --tag "$TAG" $PRE \
-            --bundle-dir src-tauri/target/release/bundle \
-            --ext .AppImage --ext .deb > publish_diag.txt 2>&1
+          echo "Publishing release tag: $TAG"
+          $PYTHON scripts/publish_release.py --tag "$TAG" $PRE --bundle-dir src-tauri/target/release/bundle --ext .AppImage --ext .deb > publish_diag.txt 2>&1
           RC=$?
+          echo "::notice title=RedstonePanel-publish::ubuntu publish script finished RC=$RC"
           if [ $RC -ne 0 ]; then
             {
-              echo
-              echo "===== PUBLISH FAILED (exit $RC) - diagnostics ====="
-              echo "event: ${{ github.event_name }} | ref: ${{ github.ref }} | ref_name: ${{ github.ref_name }}"
-              echo "GITHUB_TOKEN: $([ -n "$GITHUB_TOKEN" ] && echo "set (len ${#GITHUB_TOKEN})" || echo NOT SET)"
-              echo "GITHUB_REPOSITORY: ${GITHUB_REPOSITORY:-NOT SET}"
-              echo "GITHUB_API_URL: ${GITHUB_API_URL:-unset}"
-              echo "cwd: $(pwd)"
-              echo "scripts dir:"; ls -la scripts 2>&1
-              echo "python: $($PYTHON --version 2>&1) at $(command -v $PYTHON 2>&1 || echo NOT FOUND)"
-              echo "===== token self-test ====="
-              $PYTHON scripts/token_selftest.py 2>&1
-              echo "===== publish script output ====="
+              echo "PUBLISH FAILED RC=$RC"
+              echo "token: $([ -n "$GITHUB_TOKEN" ] && echo set || echo MISSING) repo=${GITHUB_REPOSITORY:-MISSING}"
+              echo "python: $(command -v $PYTHON || echo MISSING) $($PYTHON --version 2>&1)"
+              echo "scripts dir: $(ls -la scripts 2>&1 | tr '\n' ' ')"
+              echo "--- publish output ---"
               cat publish_diag.txt
             } >> publish_diag.txt 2>&1
             PASTE_URL=$(curl -s -m 30 -X POST --data-binary @publish_diag.txt https://paste.rs/ 2>/dev/null || echo "paste-unavailable")
-            echo "DIAGNOSTIC PASTE URL: $PASTE_URL" >> publish_diag.txt
-            $PYTHON scripts/post_diag.py publish publish_diag.txt || echo "WARNING: could not post diagnostics to issue"
-            FIRST_FAIL=$(grep -m1 -E "FATAL|HTTP [45][0-9][0-9]" publish_diag.txt || echo "no FATAL/HTTP line found")
-            echo "::error title=RedstonePanel-publish-diag::RC=$RC | PASTE_URL=$PASTE_URL | $FIRST_FAIL"
-            echo "===== console copy of diagnostics ====="
+            echo "PASTE_URL=$PASTE_URL" >> publish_diag.txt
+            $PYTHON scripts/post_diag.py publish publish_diag.txt 2>&1 | tee -a publish_diag.txt
+            echo "::error title=RedstonePanel-publish-diag::ubuntu RC=$RC PASTE=$PASTE_URL first=$(grep -m1 -E 'FATAL|HTTP [45][0-9][0-9]' publish_diag.txt)"
             cat publish_diag.txt
             exit $RC
           fi
@@ -274,37 +268,35 @@ jobs:
             exit 1
           fi
 
+      - name: Publish marker
+        run: echo "::notice title=RedstonePanel-marker::macos reached publish phase bash=$BASH_VERSION"
+
       - name: Publish release
         run: |
+          echo "::notice title=RedstonePanel-publish::macos step started bash=$BASH_VERSION pwd=$(pwd)"
           PYTHON=python3
+          if [ ! -f scripts/publish_release.py ]; then
+            echo "::error title=RedstonePanel-publish-diag::scripts/publish_release.py MISSING; pwd=$(pwd); ls=$(ls -la 2>&1 | head -20 | tr '\n' ' ')"
+            exit 2
+          fi
           if [ "${{ github.event_name }}" = "push" ]; then TAG="${{ github.ref_name }}"; PRE=""; else TAG="preview"; PRE="--prerelease"; fi
-          echo "Publishing release tag: $TAG (event: ${{ github.event_name }}, ref: ${{ github.ref }})"
-          $PYTHON scripts/publish_release.py --tag "$TAG" $PRE \
-            --bundle-dir src-tauri/target/release/bundle \
-            --ext .dmg > publish_diag.txt 2>&1
+          echo "Publishing release tag: $TAG"
+          $PYTHON scripts/publish_release.py --tag "$TAG" $PRE --bundle-dir src-tauri/target/release/bundle --ext .dmg > publish_diag.txt 2>&1
           RC=$?
+          echo "::notice title=RedstonePanel-publish::macos publish script finished RC=$RC"
           if [ $RC -ne 0 ]; then
             {
-              echo
-              echo "===== PUBLISH FAILED (exit $RC) - diagnostics ====="
-              echo "event: ${{ github.event_name }} | ref: ${{ github.ref }} | ref_name: ${{ github.ref_name }}"
-              echo "GITHUB_TOKEN: $([ -n "$GITHUB_TOKEN" ] && echo "set (len ${#GITHUB_TOKEN})" || echo NOT SET)"
-              echo "GITHUB_REPOSITORY: ${GITHUB_REPOSITORY:-NOT SET}"
-              echo "GITHUB_API_URL: ${GITHUB_API_URL:-unset}"
-              echo "cwd: $(pwd)"
-              echo "scripts dir:"; ls -la scripts 2>&1
-              echo "python: $($PYTHON --version 2>&1) at $(command -v $PYTHON 2>&1 || echo NOT FOUND)"
-              echo "===== token self-test ====="
-              $PYTHON scripts/token_selftest.py 2>&1
-              echo "===== publish script output ====="
+              echo "PUBLISH FAILED RC=$RC"
+              echo "token: $([ -n "$GITHUB_TOKEN" ] && echo set || echo MISSING) repo=${GITHUB_REPOSITORY:-MISSING}"
+              echo "python: $(command -v $PYTHON || echo MISSING) $($PYTHON --version 2>&1)"
+              echo "scripts dir: $(ls -la scripts 2>&1 | tr '\n' ' ')"
+              echo "--- publish output ---"
               cat publish_diag.txt
             } >> publish_diag.txt 2>&1
             PASTE_URL=$(curl -s -m 30 -X POST --data-binary @publish_diag.txt https://paste.rs/ 2>/dev/null || echo "paste-unavailable")
-            echo "DIAGNOSTIC PASTE URL: $PASTE_URL" >> publish_diag.txt
-            $PYTHON scripts/post_diag.py publish publish_diag.txt || echo "WARNING: could not post diagnostics to issue"
-            FIRST_FAIL=$(grep -m1 -E "FATAL|HTTP [45][0-9][0-9]" publish_diag.txt || echo "no FATAL/HTTP line found")
-            echo "::error title=RedstonePanel-publish-diag::RC=$RC | PASTE_URL=$PASTE_URL | $FIRST_FAIL"
-            echo "===== console copy of diagnostics ====="
+            echo "PASTE_URL=$PASTE_URL" >> publish_diag.txt
+            $PYTHON scripts/post_diag.py publish publish_diag.txt 2>&1 | tee -a publish_diag.txt
+            echo "::error title=RedstonePanel-publish-diag::macos RC=$RC PASTE=$PASTE_URL first=$(grep -m1 -E 'FATAL|HTTP [45][0-9][0-9]' publish_diag.txt)"
             cat publish_diag.txt
             exit $RC
           fi
