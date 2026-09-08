@@ -1,8 +1,5 @@
 name: Release
 on:
-  push:
-    tags:
-      - 'v*'
   pull_request:
     types: [opened, synchronize, reopened]
   workflow_dispatch:
@@ -11,13 +8,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        - name: Windows
-          os: windows-latest
         - name: Ubuntu
           os: ubuntu-22.04
-        - name: macOS
-          os: macos-latest
     runs-on: ${{ matrix.os }}
     steps:
       - name: Probe
-        run: echo "matrix probe OK — ${{ matrix.name }}"
+        run: echo "ubuntu matrix probe OK — ${{ matrix.name }}"
