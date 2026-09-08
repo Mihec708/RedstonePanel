@@ -2,15 +2,9 @@ name: Release
 on:
   pull_request:
     types: [opened, synchronize, reopened]
-  workflow_dispatch:
 jobs:
-  build-and-release:
-    strategy:
-      fail-fast: false
-      matrix:
-        - name: Ubuntu
-          os: ubuntu-latest
-    runs-on: ${{ matrix.os }}
+  probe:
+    runs-on: ubuntu-latest
     steps:
-      - name: Probe
-        run: echo "ubuntu-latest matrix probe OK — ${{ runner.os }} ${{ runner.arch }}"
+      - name: Say hello
+        run: echo "release file probe OK on ${{ github.ref_name }}"
