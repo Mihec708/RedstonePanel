@@ -1,26 +1,131 @@
 name: Release
+# Trigger rules:
+#   - tag push (v*)            -> real GitHub Release with that tag
+#   - PR update / manual run   -> DRAFT 'preview' release (safe to test)
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+env:
+  NODE_VERSION: '20'
+
 jobs:
   build-windows:
     runs-on: windows-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Probe
-        run: echo "windows job OK"
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install npm dependencies
+        run: npm install
+
+      - name: Generate app icons
+        run: python scripts/make_icons.py
+
+      - name: Build Windows installers and publish
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.event_name == 'push' && github.ref_name || 'preview' }}
+          releaseName: 'RedstonePanel'
+          releaseBody: 'RedstonePanel - native Minecraft server manager. Installers for Windows, Ubuntu and macOS.'
+          releaseDraft: ${{ github.event_name != 'push' }}
+          prerelease: false
+          overwrite: true
+          args: '--bundles nsis,msi'
+
   build-ubuntu:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Probe
-        run: echo "ubuntu job OK"
+
+      - name: Install Ubuntu dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install npm dependencies
+        run: npm install
+
+      - name: Generate app icons
+        run: python3 scripts/make_icons.py
+
+      - name: Build Ubuntu packages and publish
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.event_name == 'push' && github.ref_name || 'preview' }}
+          releaseName: 'RedstonePanel'
+          releaseBody: 'RedstonePanel - native Minecraft server manager. Installers for Windows, Ubuntu and macOS.'
+          releaseDraft: ${{ github.event_name != 'push' }}
+          prerelease: false
+          overwrite: true
+          args: '--bundles appimage,deb'
+
   build-macos:
     runs-on: macos-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Probe
-        run: echo "macos job OK"
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install npm dependencies
+        run: npm install
+
+      - name: Generate app icons
+        run: python3 scripts/make_icons.py
+
+      - name: Build macOS DMG and publish
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.event_name == 'push' && github.ref_name || 'preview' }}
+          releaseName: 'RedstonePanel'
+          releaseBody: 'RedstonePanel - native Minecraft server manager. Installers for Windows, Ubuntu and macOS.'
+          releaseDraft: ${{ github.event_name != 'push' }}
+          prerelease: false
+          overwrite: true
+          args: '--bundles dmg'
