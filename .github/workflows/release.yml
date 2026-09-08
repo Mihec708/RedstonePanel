@@ -27,18 +27,16 @@ permissions:
   contents: write
   issues: write
   pull-requests: write
-  repository-projects: write
-  metadata: write
+  checks: write
 
 jobs:
   build-windows:
     runs-on: windows-latest
     permissions:
       contents: write
-      pull-requests: write
-      repository-projects: write
       issues: write
-      metadata: write
+      pull-requests: write
+      checks: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -143,10 +141,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      pull-requests: write
-      repository-projects: write
       issues: write
-      metadata: write
+      pull-requests: write
+      checks: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -259,10 +256,9 @@ jobs:
     runs-on: macos-latest
     permissions:
       contents: write
-      pull-requests: write
-      repository-projects: write
       issues: write
-      metadata: write
+      pull-requests: write
+      checks: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
