@@ -49,6 +49,7 @@ fn ensure_data_dir(app: AppHandle) -> Result<String, String> {
 // ------------------------------------------------------------ server state
 
 struct ServerProc {
+    #[allow(dead_code)]
     dir: PathBuf,
     child: Arc<Mutex<Child>>,
     stdin: Option<BufWriter<ChildStdin>>,
@@ -303,10 +304,11 @@ fn send_console(
     id: String,
     line: String,
 ) -> Result<String, String> {
-    let mut entry = state
+    let mut map = state
         .running
         .lock()
-        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
+    let entry = map
         .get_mut(&id)
         .ok_or_else(|| "this server is not running".to_string())?;
     let stdin = entry
