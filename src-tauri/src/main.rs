@@ -314,6 +314,8 @@ fn send_console(
         .as_mut()
         .ok_or_else(|| "this server has no console input".to_string())?;
     writeln!(stdin, "{line}").map_err(|e| e.to_string())?;
+    // BufWriter buffers; flush so the command reaches the server immediately.
+    stdin.flush().map_err(|e| e.to_string())?;
     Ok(line)
 }
 

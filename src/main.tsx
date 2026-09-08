@@ -1,17 +1,20 @@
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import {
   Archive,
   CirclePower,
   Clock3,
   Cloud,
-  FileTree,
+  FolderTree,
   Gamepad2,
   HardDriveDownload,
   Image,
   Play,
   Plus,
   RefreshCw,
+  Save,
   Search,
   Server,
   Skull,
@@ -22,37 +25,12 @@ import {
 } from 'lucide-react';
 import './styles.css';
 
-type ServerStatus = 'Online' | 'Starting' | 'Offline';
+type ServerInfo = { id: string; name: string; running: boolean };
+type ConsoleLine = { id: string; line: string; source: string };
+type FileEntry = { name: string; dir: boolean };
+type Telemetry = { cpu_usage: number; used_memory: number; total_memory: number };
 
-type ManagedServer = {
-  id: number;
-  name: string;
-  type: string;
-  status: ServerStatus;
-  path: string;
-  cpu: number;
-  ram: number;
-  tps: number;
-};
-
-const servers: ManagedServer[] = [
-  { id: 1, name: 'Quartz SMP', type: 'Paper 1.21', status: 'Online', path: '~/Servers/quartz-smp', cpu: 24, ram: 58, tps: 19.9 },
-  { id: 2, name: 'Create Lab', type: 'Forge', status: 'Starting', path: '~/Servers/create-lab', cpu: 61, ram: 72, tps: 17.6 },
-  { id: 3, name: 'Fabric Tests', type: 'Fabric', status: 'Offline', path: '~/Servers/fabric-tests', cpu: 0, ram: 0, tps: 0 },
-];
-
-const consoleLines = [
-  '§a[12:01:14 INFO] Starting minecraft server version 1.21',
-  '§e[12:01:16 WARN] Missing optional plugin LuckPerms-Chat',
-  '§b[12:01:20 INFO] Preparing spawn area: 100%',
-  '§a[12:01:22 INFO] Done (8.421s)! For help, type "help"',
-  '§c[12:03:41 INFO] Alex joined the game',
-];
-
-const files = ['server.properties', 'world/', 'plugins/', 'mods/', 'config/', 'logs/latest.log', 'ops.json', 'banned-players.json'];
-const players = ['Alex', 'Steve', 'Rana', 'Noor'];
-const backups = ['Today 12:00 — Pre-mod snapshot', 'Yesterday 03:00 — Scheduled backup', 'Jul 18 20:14 — Before Nether reset'];
-const mods = ['Lithium', 'Simple Voice Chat', 'WorldEdit', 'BlueMap'];
+const isTauri = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
 function colorizeMinecraft(line: string) {
   const classMap: Record<string, string> = { '§a': 'mc-green', '§b': 'mc-aqua', '§c': 'mc-red', '§e': 'mc-yellow' };
@@ -70,13 +48,172 @@ function Sparkline({ values, tone }: { values: number[]; tone: 'red' | 'gold' | 
 }
 
 function App() {
-  const [selectedId, setSelectedId] = useState(1);
-  const selected = servers.find((server) => server.id === selectedId) ?? servers[0];
-  const telemetry = useMemo(() => ({
-    cpu: [20, 23, 19, 34, 31, selected.cpu, 26, 29],
-    ram: [42, 48, 51, 50, 54, selected.ram, 57, 59],
-    tps: [99, 97, 96, 100, 98, Math.round(selected.tps * 5), 99, 100],
-  }), [selected]);
+  const [dataDir, setDataDir] = useState('');
+  const [servers, setServers] = useState<ServerInfo[]>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [lines, setLines] = useState<ConsoleLine[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [command, setCommand] = useState('');
+  const [telemetry, setTelemetry] = useState<Telemetry | null>(null);
+  const [history, setHistory] = useState<{ cpu: number[]; ram: number[] }>({ cpu: [], ram: [] });
+  const [files, setFiles] = useState<FileEntry[]>([]);
+  const [openFile, setOpenFile] = useState<string | null>(null);
+  const [fileText, setFileText] = useState('');
+  const consoleRef = useRef<HTMLPreElement>(null);
+
+  const selected = servers.find((server) => server.id === selectedId) ?? null;
+  const selectedLines = selected ? lines.filter((line) => line.id === selected.id) : [];
+
+  const refreshServers = useCallback(async () => {
+    const list = await invoke<ServerInfo[]>('list_servers');
+    setServers(list);
+    setSelectedId((prev) => (prev && list.some((s) => s.id === prev) ? prev : list[0]?.id ?? null));
+    return list;
+  }, []);
+
+  const loadFiles = useCallback(async (id: string) => {
+    try {
+      const list = await invoke<FileEntry[]>('list_files', { id });
+      setFiles(list);
+    } catch {
+      setFiles([]);
+    }
+    setOpenFile(null);
+    setFileText('');
+  }, []);
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    const unlisteners: Array<() => void> = [];
+    invoke<string>('ensure_data_dir').then(setDataDir).catch((e) => setError(String(e)));
+    refreshServers()
+      .then((list) => list[0] && loadFiles(list[0].id))
+      .catch((e) => setError(String(e)));
+    invoke<Telemetry>('host_telemetry').then(setTelemetry).catch(() => {});
+    listen<ConsoleLine>('server-console', (event) => {
+      setLines((prev) => [...prev.slice(-1500), event.payload]);
+    }).then((off) => unlisteners.push(off)).catch(() => {});
+    listen<{ id: string; code: number }>('server-exit', () => {
+      refreshServers().catch(() => {});
+    }).then((off) => unlisteners.push(off)).catch(() => {});
+    const poll = setInterval(() => {
+      invoke<Telemetry>('host_telemetry').then((t) => {
+        setTelemetry(t);
+        const cpuPct = t.cpu_usage ?? 0;
+        const ramPct = t.total_memory > 0 ? (t.used_memory / t.total_memory) * 100 : 0;
+        setHistory((h) => ({
+          cpu: [...h.cpu, cpuPct].slice(-12),
+          ram: [...h.ram, ramPct].slice(-12),
+        }));
+      }).catch(() => {});
+    }, 3000);
+    return () => {
+      clearInterval(poll);
+      unlisteners.forEach((off) => off());
+    };
+  }, [refreshServers, loadFiles]);
+
+  useEffect(() => {
+    const el = consoleRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [selectedLines.length, selectedId]);
+
+  useEffect(() => {
+    if (selectedId) loadFiles(selectedId);
+  }, [selectedId, loadFiles]);
+
+  async function power(action: 'start' | 'stop') {
+    if (!selected) return;
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const result = await invoke<string>(action === 'start' ? 'start_server' : 'stop_server', { id: selected.id });
+      setNotice(result);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+      refreshServers().catch(() => {});
+    }
+  }
+
+  async function restart() {
+    if (!selected) return;
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      if (selected.running) {
+        try { await invoke('stop_server', { id: selected.id }); } catch { /* may not be running */ }
+        await new Promise((resolve) => setTimeout(resolve, 700));
+      }
+      const result = await invoke<string>('start_server', { id: selected.id });
+      setNotice(result);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+      refreshServers().catch(() => {});
+    }
+  }
+
+  async function addServer() {
+    const name = window.prompt('Name your new server (letters, numbers, dashes):');
+    if (!name) return;
+    setError(null);
+    setNotice(null);
+    try {
+      const created = await invoke<ServerInfo>('create_server', { name });
+      setNotice(`${created.name} created — drop a .jar file into its folder, then press Start`);
+      await refreshServers();
+      setSelectedId(created.id);
+      loadFiles(created.id);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function sendCommand() {
+    const line = command.trim();
+    if (!line || !selected) return;
+    setCommand('');
+    try {
+      await invoke('send_console', { id: selected.id, line });
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function openFileEntry(entry: FileEntry) {
+    if (entry.dir || !selected) return;
+    setError(null);
+    try {
+      const text = await invoke<string>('read_file', { id: selected.id, path: entry.name });
+      setOpenFile(entry.name);
+      setFileText(text);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function saveFile() {
+    if (!openFile || !selected) return;
+    setError(null);
+    try {
+      await invoke('write_file', { id: selected.id, path: openFile, content: fileText });
+      setNotice(`${openFile} saved`);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  const ramPct = telemetry && telemetry.total_memory > 0 ? Math.round((telemetry.used_memory / telemetry.total_memory) * 100) : 0;
+  const cpuValues = history.cpu.length ? history.cpu : [0, 0];
+  const ramValues = history.ram.length ? history.ram : [0, 0];
+  const onlineValues = servers.map((s) => (s.running ? 1 : 0));
 
   return (
     <main className="app-shell">
@@ -86,65 +223,109 @@ function App() {
           <div><strong>RedstonePanel</strong><span>Desktop Server HQ</span></div>
         </div>
         <nav className="server-list" aria-label="Managed servers">
+          {servers.length === 0 && (
+            <div className="empty-list">
+              No servers yet.<br />Create one to get started.
+            </div>
+          )}
           {servers.map((server) => (
             <button key={server.id} className={server.id === selectedId ? 'server-card active' : 'server-card'} onClick={() => setSelectedId(server.id)}>
-              <Server size={18} />
-              <span><strong>{server.name}</strong><small>{server.type} · {server.status}</small></span>
+              <Server size={18} className={server.running ? 'dot-on' : 'dot-off'} />
+              <span><strong>{server.name}</strong><small>{server.running ? 'Running' : 'Stopped'} · {server.id}</small></span>
             </button>
           ))}
         </nav>
-        <button className="add-server"><Plus size={24} /> Add server</button>
+        {dataDir && <div className="storage-line" title={dataDir}>Storage: {dataDir}</div>}
+        <button className="add-server" onClick={addServer}><Plus size={24} /> Add server</button>
       </aside>
 
       <section className="workspace">
         <header className="hero">
           <div>
-            <p className="eyebrow">{selected.path}</p>
-            <h1>{selected.name}</h1>
-            <p>A native local-hosting control center with live process monitoring, backups, mods, and no-router sharing.</p>
+            <p className="eyebrow">{selected ? `servers/${selected.id}` : 'no server selected'}</p>
+            <h1>{selected?.name ?? 'RedstonePanel'}</h1>
+            <p>A native local-hosting control center — pick a server, drop in a jar, and run it from your desktop.</p>
           </div>
           <div className="power-actions">
-            <button><Play size={16} />Start</button><button><Square size={16} />Stop</button><button><RefreshCw size={16} />Restart</button><button className="danger"><CirclePower size={16} />Force Kill</button>
+            <button disabled={!selected || busy} onClick={() => power('start')}><Play size={16} />Start</button>
+            <button disabled={!selected || busy} onClick={() => power('stop')}><Square size={16} />Stop</button>
+            <button disabled={!selected || busy} onClick={restart}><RefreshCw size={16} />Restart</button>
+            <button className="danger" disabled={!selected || busy} onClick={() => power('stop')}><CirclePower size={16} />Force Kill</button>
           </div>
         </header>
 
+        {error && <div className="banner error-banner">{error}</div>}
+        {notice && <div className="banner notice-banner">{notice}</div>}
+
         <section className="grid three">
-          <Metric title="CPU" value={`${selected.cpu}%`} tone="red" values={telemetry.cpu} />
-          <Metric title="RAM" value={`${selected.ram}%`} tone="gold" values={telemetry.ram} />
-          <Metric title="TPS" value={selected.tps.toFixed(1)} tone="green" values={telemetry.tps} />
+          <Metric title="Host CPU" value={telemetry ? `${telemetry.cpu_usage.toFixed(1)}%` : '—'} tone="red" values={cpuValues} />
+          <Metric title="Host RAM" value={telemetry ? `${ramPct}% · ${(telemetry.used_memory / 2 ** 30).toFixed(1)}/${(telemetry.total_memory / 2 ** 30).toFixed(1)} GB` : '—'} tone="gold" values={ramValues} />
+          <Metric title="Servers" value={selected ? (selected.running ? 'ONLINE' : 'OFFLINE') : '—'} tone="green" values={onlineValues.length ? onlineValues : [0, 0]} />
         </section>
 
         <section className="grid two">
-          <Panel icon={<TerminalSquare />} title="Live Interactive Console" action={<label><input type="checkbox" defaultChecked /> Autoscroll</label>}>
-            <div className="console-toolbar"><Search size={15} /> <input placeholder="Search history" /></div>
-            <pre className="console">{consoleLines.map((line) => <React.Fragment key={line}>{colorizeMinecraft(line)}{`\n`}</React.Fragment>)}</pre>
-            <div className="command-bar"><input placeholder="say Welcome to RedstonePanel" /><button>Send</button></div>
+          <Panel icon={<TerminalSquare />} title={`Live Console${selected ? ` — ${selected.name}` : ''}`} action={<span className="planned-chip live">LIVE</span>}>
+            <div className="console-toolbar"><Search size={15} /> <span className="toolbar-hint">Console output is streamed in real time</span></div>
+            <pre className="console" ref={consoleRef}>
+              {selectedLines.length === 0
+                ? <span className="console-empty">{selected ? (selected.running ? 'Waiting for output…' : 'Server is stopped. Press Start to begin.') : 'Select a server to see its console.'}</span>
+                : selectedLines.map((line, index) => <React.Fragment key={index}>{colorizeMinecraft(line.line)}{`\n`}</React.Fragment>)}
+            </pre>
+            <div className="command-bar">
+              <input
+                value={command}
+                placeholder={selected ? 'say Welcome to RedstonePanel' : 'select a server first'}
+                disabled={!selected}
+                onChange={(event) => setCommand(event.target.value)}
+                onKeyDown={(event) => event.key === 'Enter' && sendCommand()}
+              />
+              <button disabled={!selected || !command.trim()} onClick={sendCommand}>Send</button>
+            </div>
           </Panel>
-          <Panel icon={<FileTree />} title="Branch File Manager & Code Editor">
-            <div className="tree">{files.map((file) => <button key={file}>├─ {file}</button>)}</div>
-            <textarea spellCheck={false} defaultValue={'motd=§cRedstonePanel §7SMP\nmax-players=20\ngamemode=survival'} />
+          <Panel icon={<FolderTree />} title={`Server Files${selected ? ` — ${selected.name}` : ''}`} action={<span className="planned-chip live">LIVE</span>}>
+            <div className="tree">
+              {files.length === 0 && <span className="toolbar-hint">No files yet — this is the server folder.</span>}
+              {files.map((file) => (
+                <button key={file.name} className={openFile === file.name ? 'file-active' : ''} disabled={file.dir} onClick={() => openFileEntry(file)}>
+                  {file.dir ? '▸' : '├'} {file.name}
+                </button>
+              ))}
+            </div>
+            {openFile ? (
+              <>
+                <textarea value={fileText} spellCheck={false} onChange={(event) => setFileText(event.target.value)} />
+                <div className="save-row">
+                  <span className="toolbar-hint">editing {openFile}</span>
+                  <button className="primary" onClick={saveFile}><Save size={14} /> Save file</button>
+                </div>
+              </>
+            ) : (
+              <p className="toolbar-hint">Click a file (like server.properties) to edit it, then Save.</p>
+            )}
           </Panel>
         </section>
 
         <section className="grid two">
-          <Panel icon={<Gamepad2 />} title="Smart server.properties Editor">
+          <Panel icon={<Gamepad2 />} title="Smart server.properties Editor" planned>
             <div className="form-grid"><label>Gamemode<select><option>Survival</option><option>Creative</option></select></label><label>Difficulty<select><option>Normal</option></select></label><label>Max Players<input type="number" defaultValue={20} /></label><label className="toggle">PVP<input type="checkbox" defaultChecked /></label></div>
-            <button className="muted">Switch to manual raw mode</button>
+            <button className="muted">Edit server.properties directly in the file panel above</button>
           </Panel>
-          <Panel icon={<Users />} title="Player Management">
-            {players.map((player) => <div className="player" key={player}><img src={`https://api.dicebear.com/9.x/pixel-art/svg?seed=${player}`} alt="" /><strong>{player}</strong><button>OP</button><button>Kick</button><button>Ban</button><select><option>Survival</option><option>Creative</option></select></div>)}
+          <Panel icon={<Users />} title="Player Management" planned>
+            <div className="player"><span className="avatar">A</span><strong>Alex</strong><button>OP</button><button>Kick</button><button>Ban</button><select><option>Survival</option><option>Creative</option></select></div>
+            <div className="player"><span className="avatar">S</span><strong>Steve</strong><button>OP</button><button>Kick</button><button>Ban</button><select><option>Survival</option><option>Creative</option></select></div>
+            <div className="player"><span className="avatar">R</span><strong>Rana</strong><button>OP</button><button>Kick</button><button>Ban</button><select><option>Survival</option><option>Creative</option></select></div>
           </Panel>
         </section>
 
         <section className="grid three">
-          <Panel icon={<Archive />} title="Backups & Time Machine"><button className="primary">Take Snapshot</button>{backups.map((b) => <div className="timeline" key={b}>{b}<button>Restore</button></div>)}</Panel>
-          <Panel icon={<Clock3 />} title="Visual Task Scheduler"><div className="task">Restart daily at 3 AM</div><div className="task">Backup every 6 hours</div><div className="task">Broadcast every 30 minutes</div></Panel>
-          <Panel icon={<HardDriveDownload />} title="Modded Wizard & Browser"><div className="chips"><span>Vanilla</span><span>Paper</span><span>Forge</span><span>Fabric</span><span>Quilt</span></div>{mods.map((mod) => <div className="mod" key={mod}>{mod}<button>Install</button></div>)}</Panel>
+          <Panel icon={<Archive />} title="Backups & Time Machine" planned><button className="primary">Take Snapshot</button>{['Today 12:00 — Pre-mod snapshot', 'Yesterday 03:00 — Scheduled backup'].map((b) => <div className="timeline" key={b}>{b}<button>Restore</button></div>)}</Panel>
+          <Panel icon={<Clock3 />} title="Visual Task Scheduler" planned><div className="task">Restart daily at 3 AM</div><div className="task">Backup every 6 hours</div><div className="task">Broadcast every 30 minutes</div></Panel>
+          <Panel icon={<HardDriveDownload />} title="Modded Wizard & Browser" planned><div className="chips"><span>Vanilla</span><span>Paper</span><span>Forge</span><span>Fabric</span><span>Quilt</span></div>{['Lithium', 'Simple Voice Chat', 'WorldEdit'].map((mod) => <div className="mod" key={mod}>{mod}<button>Install</button></div>)}</Panel>
         </section>
 
         <section className="grid two">
-          <Panel icon={<Image />} title="Server Icon Manager & Visual MOTD"><div className="icon-preview"><Skull /> 64×64</div><button>Upload and crop icon</button><div className="motd"><span className="mc-red">RedstonePanel</span> <span>— Quartz SMP</span></div></Panel>
-          <Panel icon={<Cloud />} title="No-Router Port Forwarding"><label className="share-toggle"><input type="checkbox" /> Enable playit.gg / Cloudflared tunnel</label><div className="share-url">example.playit.gg:25565</div></Panel>
+          <Panel icon={<Image />} title="Server Icon Manager & Visual MOTD" planned><div className="icon-preview"><Skull /> 64×64</div><button>Upload and crop icon</button><div className="motd"><span className="mc-red">RedstonePanel</span> <span>— your server</span></div></Panel>
+          <Panel icon={<Cloud />} title="No-Router Port Forwarding" planned><label className="share-toggle"><input type="checkbox" /> Enable playit.gg / Cloudflared tunnel</label><div className="share-url">example.playit.gg:25565</div></Panel>
         </section>
       </section>
     </main>
@@ -155,8 +336,18 @@ function Metric({ title, value, values, tone }: { title: string; value: string; 
   return <article className="metric"><span>{title}</span><strong>{value}</strong><Sparkline values={values} tone={tone} /></article>;
 }
 
-function Panel({ icon, title, action, children }: { icon: React.ReactNode; title: string; action?: React.ReactNode; children: React.ReactNode }) {
-  return <article className="panel"><header><span className="panel-icon">{icon}</span><h2>{title}</h2>{action}</header>{children}</article>;
+function Panel({ icon, title, action, planned, children }: { icon: React.ReactNode; title: string; action?: React.ReactNode; planned?: boolean; children: React.ReactNode }) {
+  return (
+    <article className="panel">
+      <header>
+        <span className="panel-icon">{icon}</span>
+        <h2>{title}</h2>
+        {planned && !action && <span className="planned-chip">PLANNED</span>}
+        {action}
+      </header>
+      {children}
+    </article>
+  );
 }
 
 createRoot(document.getElementById('root')!).render(<App />);
