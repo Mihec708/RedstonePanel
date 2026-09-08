@@ -1,15 +1,74 @@
 name: Release
-# Diagnostic round: ubuntu-only, no third-party actions, self-reporting via PR comments.
+# Trigger rules:
+#   - tag push (v*)         -> real GitHub Release with that tag
+#   - PR update / manual run -> DRAFT 'preview' release (safe to test)
+# Design note: this account blocks some third-party Actions (and strategy.matrix),
+# so this pipeline only uses actions/checkout + preinstalled toolchains + curl.
 on:
   pull_request:
     types: [opened, synchronize, reopened]
   workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
 
 permissions:
   contents: write
-  issues: write
 
 jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install npm dependencies
+        shell: bash
+        run: npm install
+
+      - name: Generate app icons
+        shell: bash
+        run: python scripts/make_icons.py
+
+      - name: Build Windows installers
+        shell: bash
+        run: |
+          if npx tauri build --bundles nsis,msi > build.log 2>&1; then
+            echo "BUILD OK"
+            tail -n 5 build.log
+          else
+            echo "BUILD FAILED - publishing log tail as a draft release for remote inspection"
+            BODY=$(tail -c 6000 build.log | python -c 'import sys,json; print(json.dumps(sys.stdin.read()))')
+            curl -s -X POST -H "Authorization: token $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" \
+              -d "{\"tag_name\":\"preview\",\"name\":\"RedstonePanel build log (windows)\",\"draft\":true,\"body\":$BODY}" \
+              "https://api.github.com/repos/${{ github.repository }}/releases" || true
+            echo "----- tail of build.log -----"
+            tail -n 40 build.log
+            exit 1
+          fi
+
+      - name: Publish release
+        shell: bash
+        run: |
+          set -e
+          if [ "${{ github.event_name }}" = "push" ]; then TAG="${{ github.ref_name }}"; DRAFT=false; else TAG="preview"; DRAFT=true; fi
+          API="https://api.github.com/repos/${{ github.repository }}"
+          AUTH="Authorization: token $GITHUB_TOKEN"
+          ACPT="Accept: application/vnd.github+json"
+          PAYLOAD=$(python -c 'import json; print(json.dumps({"tag_name":"'"$TAG"'","name":"RedstonePanel","draft":'"$DRAFT"',"body":"RedstonePanel - native Minecraft server manager. Installers for Windows, Ubuntu and macOS."}))')
+          RESP=$(curl -s -X POST -H "$AUTH" -H "$ACPT" -d "$PAYLOAD" "$API/releases")
+          UPLOAD_URL=$(printf '%s' "$RESP" | python -c 'import sys,json; print(json.load(sys.stdin).get("upload_url","").split("?")[0])')
+          if [ -z "$UPLOAD_URL" ]; then
+            RESP=$(curl -s -H "$AUTH" -H "$ACPT" "$API/releases/tags/$TAG")
+            UPLOAD_URL=$(printf '%s' "$RESP" | python -c 'import sys,json; print(json.load(sys.stdin).get("upload_url","").split("?")[0])')
+          fi
+          if [ -z "$UPLOAD_URL" ]; then echo "FAILED to resolve release upload URL"; echo "$RESP"; exit 1; fi
+          echo "release tag: $TAG"
+          for f in $(find src-tauri/target/release/bundle -type f \( -name "*.exe" -o -name "*.msi" \)); do
+            CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST -H "$AUTH" -H "Content-Type: application/octet-stream" --data-binary "@$f" "$UPLOAD_URL?name=$(basename "$f")")
+            echo "uploaded $(basename "$f") -> http $CODE"
+          done
+
   build-ubuntu:
     runs-on: ubuntu-latest
     steps:
@@ -29,60 +88,95 @@ jobs:
             libssl-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev
-      - name: diag-apt
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          if [ -n "${{ github.event.number }}" ]; then
-            curl -s -o /dev/null -X POST -H "Authorization: token $GH_TOKEN" -H "Accept: application/vnd.github+json" -d '{"body":"[diag] apt dependencies OK"}' "https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.number }}/comments"
-          fi
-
-      - name: Check preinstalled toolchain
-        run: |
-          rustc --version
-          cargo --version
-          node --version
-          npm --version
-          python3 --version
-      - name: diag-toolchain
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          if [ -n "${{ github.event.number }}" ]; then
-            curl -s -o /dev/null -X POST -H "Authorization: token $GH_TOKEN" -H "Accept: application/vnd.github+json" -d '{"body":"[diag] preinstalled toolchain OK (rustc/cargo/node/npm/python3)"}' "https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.number }}/comments"
-          fi
 
       - name: Install npm dependencies
         run: npm install
-      - name: diag-npm
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          if [ -n "${{ github.event.number }}" ]; then
-            curl -s -o /dev/null -X POST -H "Authorization: token $GH_TOKEN" -H "Accept: application/vnd.github+json" -d '{"body":"[diag] npm install OK"}' "https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.number }}/comments"
-          fi
 
       - name: Generate app icons
         run: python3 scripts/make_icons.py
-      - name: diag-icons
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Ubuntu packages
         run: |
-          if [ -n "${{ github.event.number }}" ]; then
-            curl -s -o /dev/null -X POST -H "Authorization: token $GH_TOKEN" -H "Accept: application/vnd.github+json" -d '{"body":"[diag] icons generated OK"}' "https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.number }}/comments"
+          if npx tauri build --bundles appimage,deb > build.log 2>&1; then
+            echo "BUILD OK"
+            tail -n 5 build.log
+          else
+            echo "BUILD FAILED - publishing log tail as a draft release for remote inspection"
+            BODY=$(tail -c 6000 build.log | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')
+            curl -s -X POST -H "Authorization: token $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" \
+              -d "{\"tag_name\":\"preview\",\"name\":\"RedstonePanel build log (ubuntu)\",\"draft\":true,\"body\":$BODY}" \
+              "https://api.github.com/repos/${{ github.repository }}/releases" || true
+            echo "----- tail of build.log -----"
+            tail -n 40 build.log
+            exit 1
           fi
 
-      - name: Build frontend
-        run: npm run build
-      - name: diag-frontend
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish release
         run: |
-          if [ -n "${{ github.event.number }}" ]; then
-            curl -s -o /dev/null -X POST -H "Authorization: token $GH_TOKEN" -H "Accept: application/vnd.github+json" -d '{"body":"[diag] frontend build OK"}' "https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.number }}/comments"
+          set -e
+          if [ "${{ github.event_name }}" = "push" ]; then TAG="${{ github.ref_name }}"; DRAFT=false; else TAG="preview"; DRAFT=true; fi
+          API="https://api.github.com/repos/${{ github.repository }}"
+          AUTH="Authorization: token $GITHUB_TOKEN"
+          ACPT="Accept: application/vnd.github+json"
+          PAYLOAD=$(python3 -c 'import json; print(json.dumps({"tag_name":"'"$TAG"'","name":"RedstonePanel","draft":'"$DRAFT"',"body":"RedstonePanel - native Minecraft server manager. Installers for Windows, Ubuntu and macOS."}))')
+          RESP=$(curl -s -X POST -H "$AUTH" -H "$ACPT" -d "$PAYLOAD" "$API/releases")
+          UPLOAD_URL=$(printf '%s' "$RESP" | python3 -c 'import sys,json; print(json.load(sys.stdin).get("upload_url","").split("?")[0])')
+          if [ -z "$UPLOAD_URL" ]; then
+            RESP=$(curl -s -H "$AUTH" -H "$ACPT" "$API/releases/tags/$TAG")
+            UPLOAD_URL=$(printf '%s' "$RESP" | python3 -c 'import sys,json; print(json.load(sys.stdin).get("upload_url","").split("?")[0])')
+          fi
+          if [ -z "$UPLOAD_URL" ]; then echo "FAILED to resolve release upload URL"; echo "$RESP"; exit 1; fi
+          echo "release tag: $TAG"
+          for f in $(find src-tauri/target/release/bundle -type f \( -name "*.AppImage" -o -name "*.deb" \)); do
+            CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST -H "$AUTH" -H "Content-Type: application/octet-stream" --data-binary "@$f" "$UPLOAD_URL?name=$(basename "$f")")
+            echo "uploaded $(basename "$f") -> http $CODE"
+          done
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install npm dependencies
+        run: npm install
+
+      - name: Generate app icons
+        run: python3 scripts/make_icons.py
+
+      - name: Build macOS DMG
+        run: |
+          if npx tauri build --bundles dmg > build.log 2>&1; then
+            echo "BUILD OK"
+            tail -n 5 build.log
+          else
+            echo "BUILD FAILED - publishing log tail as a draft release for remote inspection"
+            BODY=$(tail -c 6000 build.log | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')
+            curl -s -X POST -H "Authorization: token $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" \
+              -d "{\"tag_name\":\"preview\",\"name\":\"RedstonePanel build log (macos)\",\"draft\":true,\"body\":$BODY}" \
+              "https://api.github.com/repos/${{ github.repository }}/releases" || true
+            echo "----- tail of build.log -----"
+            tail -n 40 build.log
+            exit 1
           fi
 
-      - name: Show artifacts
+      - name: Publish release
         run: |
-          ls -la src-tauri/icons
-          ls -la dist
+          set -e
+          if [ "${{ github.event_name }}" = "push" ]; then TAG="${{ github.ref_name }}"; DRAFT=false; else TAG="preview"; DRAFT=true; fi
+          API="https://api.github.com/repos/${{ github.repository }}"
+          AUTH="Authorization: token $GITHUB_TOKEN"
+          ACPT="Accept: application/vnd.github+json"
+          PAYLOAD=$(python3 -c 'import json; print(json.dumps({"tag_name":"'"$TAG"'","name":"RedstonePanel","draft":'"$DRAFT"',"body":"RedstonePanel - native Minecraft server manager. Installers for Windows, Ubuntu and macOS."}))')
+          RESP=$(curl -s -X POST -H "$AUTH" -H "$ACPT" -d "$PAYLOAD" "$API/releases")
+          UPLOAD_URL=$(printf '%s' "$RESP" | python3 -c 'import sys,json; print(json.load(sys.stdin).get("upload_url","").split("?")[0])')
+          if [ -z "$UPLOAD_URL" ]; then
+            RESP=$(curl -s -H "$AUTH" -H "$ACPT" "$API/releases/tags/$TAG")
+            UPLOAD_URL=$(printf '%s' "$RESP" | python3 -c 'import sys,json; print(json.load(sys.stdin).get("upload_url","").split("?")[0])')
+          fi
+          if [ -z "$UPLOAD_URL" ]; then echo "FAILED to resolve release upload URL"; echo "$RESP"; exit 1; fi
+          echo "release tag: $TAG"
+          for f in $(find src-tauri/target/release/bundle -type f -name "*.dmg"); do
+            CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST -H "$AUTH" -H "Content-Type: application/octet-stream" --data-binary "@$f" "$UPLOAD_URL?name=$(basename "$f")")
+            echo "uploaded $(basename "$f")" -> http $CODE
+          done
