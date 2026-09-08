@@ -1,0 +1,82 @@
+name: Upload test
+
+# One-shot diagnostic: try several known clients against the real asset
+# upload endpoint (token from secrets context) and report each HTTP result
+# as a check-run annotation. Cleans up its probe asset afterwards.
+
+on:
+  push:
+    branches: ['**']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  upload-test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Upload matrix
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set +e
+          if [ -z "${GITHUB_TOKEN:-}" ]; then
+            export GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}"
+          fi
+          echo "::notice title=upload-test::token_len=${#GITHUB_TOKEN} repo=${GITHUB_REPOSITORY:-MISSING}"
+          printf 'redstone upload probe %s\n' "$(date -u +%FT%TZ)" > probe_asset.txt
+
+          REL=$(curl -s -H "Authorization: token $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/tags/preview")
+          UPLOAD_URL=$(printf '%s' "$REL" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('upload_url','').split('?')[0])" 2>/dev/null || true)
+          echo "::notice title=upload-test::upload_url=${UPLOAD_URL:-MISSING} rel_head=$(echo "$REL" | head -c 120)"
+          if [ -z "$UPLOAD_URL" ]; then
+            echo "::error title=upload-test::could not resolve upload URL; aborting matrix"
+            exit 1
+          fi
+
+          # 1) gh CLI (known-good client, sends octet-stream)
+          gh release upload preview probe_asset.txt --clobber > gh_out.txt 2>&1
+          GHRC=$?
+          echo "::notice title=upload-test::gh_cli RC=$GHRC last=$(tail -n1 gh_out.txt)"
+
+          # 2) curl raw octet-stream
+          curl -s -L -X POST -H "Authorization: token $GITHUB_TOKEN" \
+            -H "Content-Type: application/octet-stream" --data-binary @probe_asset.txt \
+            "${UPLOAD_URL}?name=probe_asset.txt" -o curl_out.json -w "curl_http=%{http_code}" > curl_w.txt 2>&1
+          CURLCODE=$(grep -o 'curl_http=[0-9]*' curl_w.txt | cut -d= -f2)
+          echo "::notice title=upload-test::curl_octet HTTP=${CURLCODE:-?} body=$(head -c 200 curl_out.json)"
+
+          # 3) curl multipart/form-data
+          curl -s -L -X POST -H "Authorization: token $GITHUB_TOKEN" \
+            -F "file=@probe_asset.txt;type=application/octet-stream" \
+            "${UPLOAD_URL}?name=probe_asset.txt" -o curlmp_out.json -w "curl_http=%{http_code}" > curlmp_w.txt 2>&1
+          CURLEMP=$(grep -o 'curl_http=[0-9]*' curlmp_w.txt | cut -d= -f2)
+          echo "::notice title=upload-test::curl_multipart HTTP=${CURLEMP:-?} body=$(head -c 200 curlmp_out.json)"
+
+          # cleanup: delete the probe asset if any upload succeeded
+          curl -s -H "Authorization: token $GITHUB_TOKEN" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/tags/preview/assets" \
+            | python3 -c "
+            import json, sys, os, urllib.request, urllib.error
+            tok = os.environ.get('GITHUB_TOKEN', '')
+            try:
+                for a in json.load(sys.stdin):
+                    if a.get('name') == 'probe_asset.txt' and a.get('url'):
+                        r = urllib.request.Request(a['url'], method='DELETE')
+                        r.add_header('Authorization', 'token ' + tok)
+                        try:
+                            with urllib.request.urlopen(r, timeout=30) as resp:
+                                print('cleanup', resp.status)
+                        except urllib.error.HTTPError as e:
+                            print('cleanup HTTP', e.code)
+            except Exception as e:
+                print('cleanup err', repr(e))
+            "
+          echo "MATRIX DONE"
