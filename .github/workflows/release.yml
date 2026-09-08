@@ -12,8 +12,11 @@ name: Release
 # the release (or fetches it if a sibling job got there first) and uploads that
 # platform's artifacts. Safe to run in parallel across the three jobs.
 #
-# Diagnostics: if a step fails, logs are posted to an issue "CI build log
-# (<platform>)" and to a paste.rs URL, and printed in the job console.
+# Diagnostics (if the publish step fails), in order of preference:
+#   1. check-run annotation (always visible, no write permission needed)
+#   2. paste.rs public URL (no auth needed to read)
+#   3. reusable issue "CI build log (publish)" (needs issues: write)
+#   4. job console
 
 on:
   pull_request:
@@ -112,6 +115,8 @@ jobs:
             PASTE_URL=$(curl -s -m 30 -X POST --data-binary @publish_diag.txt https://paste.rs/ 2>/dev/null || echo "paste-unavailable")
             echo "DIAGNOSTIC PASTE URL: $PASTE_URL" >> publish_diag.txt
             $PYTHON scripts/post_diag.py publish publish_diag.txt || echo "WARNING: could not post diagnostics to issue"
+            FIRST_FAIL=$(grep -m1 -E "FATAL|HTTP [45][0-9][0-9]" publish_diag.txt || echo "no FATAL/HTTP line found")
+            echo "::error title=RedstonePanel-publish-diag::RC=$RC | PASTE_URL=$PASTE_URL | $FIRST_FAIL"
             echo "===== console copy of diagnostics ====="
             cat publish_diag.txt
             exit $RC
@@ -211,6 +216,8 @@ jobs:
             PASTE_URL=$(curl -s -m 30 -X POST --data-binary @publish_diag.txt https://paste.rs/ 2>/dev/null || echo "paste-unavailable")
             echo "DIAGNOSTIC PASTE URL: $PASTE_URL" >> publish_diag.txt
             $PYTHON scripts/post_diag.py publish publish_diag.txt || echo "WARNING: could not post diagnostics to issue"
+            FIRST_FAIL=$(grep -m1 -E "FATAL|HTTP [45][0-9][0-9]" publish_diag.txt || echo "no FATAL/HTTP line found")
+            echo "::error title=RedstonePanel-publish-diag::RC=$RC | PASTE_URL=$PASTE_URL | $FIRST_FAIL"
             echo "===== console copy of diagnostics ====="
             cat publish_diag.txt
             exit $RC
@@ -295,6 +302,8 @@ jobs:
             PASTE_URL=$(curl -s -m 30 -X POST --data-binary @publish_diag.txt https://paste.rs/ 2>/dev/null || echo "paste-unavailable")
             echo "DIAGNOSTIC PASTE URL: $PASTE_URL" >> publish_diag.txt
             $PYTHON scripts/post_diag.py publish publish_diag.txt || echo "WARNING: could not post diagnostics to issue"
+            FIRST_FAIL=$(grep -m1 -E "FATAL|HTTP [45][0-9][0-9]" publish_diag.txt || echo "no FATAL/HTTP line found")
+            echo "::error title=RedstonePanel-publish-diag::RC=$RC | PASTE_URL=$PASTE_URL | $FIRST_FAIL"
             echo "===== console copy of diagnostics ====="
             cat publish_diag.txt
             exit $RC
