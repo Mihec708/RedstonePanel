@@ -9,8 +9,8 @@ jobs:
       fail-fast: false
       matrix:
         - name: Ubuntu
-          os: ubuntu-22.04
+          os: ubuntu-latest
     runs-on: ${{ matrix.os }}
     steps:
       - name: Probe
-        run: echo "ubuntu matrix probe OK — ${{ matrix.name }}"
+        run: echo "ubuntu-latest matrix probe OK — ${{ runner.os }} ${{ runner.arch }}"
