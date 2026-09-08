@@ -5,11 +5,10 @@ on:
 jobs:
   probe:
     strategy:
-      fail-fast: false
       matrix:
         - name: Ubuntu
           os: ubuntu-latest
     runs-on: ubuntu-latest
     steps:
       - name: Say hello
-        run: echo "static runs-on with matrix OK / ${{ matrix.name }}"
+        run: echo "matrix without fail-fast OK / ${{ matrix.name }}"
