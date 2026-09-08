@@ -4,7 +4,12 @@ on:
     types: [opened, synchronize, reopened]
 jobs:
   probe:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        - name: Ubuntu
+          os: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Say hello
-        run: echo "release file probe OK on ${{ github.ref_name }}"
+        run: echo "matrix probe OK on ${{ runner.os }} / ${{ matrix.name }}"
