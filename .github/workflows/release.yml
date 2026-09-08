@@ -1,12 +1,14 @@
 name: Release
 
-# Two ways to build:
-#   1. Push a tag like v0.1.0  -> creates a real (non-draft) GitHub Release
-#   2. Actions tab > Release > Run workflow -> creates a draft release for testing
+# How to build:
+#   1. Push a tag like v0.1.0                 -> real (non-draft) GitHub Release named after the tag
+#   2. Open or update a pull request          -> draft "preview" release (automatic test build)
+#   3. Actions tab > Release > Run workflow   -> draft "preview" release
 on:
   push:
     tags:
       - 'v*'
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -64,9 +66,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          # Tag push  -> release named after the tag (v0.1.0)
-          # Manual run -> release named preview-<run-id> (draft)
-          tagName: ${{ github.ref_name || format('preview-{0}', github.run_id) }}
+          # Tag push -> release named after the tag (v0.1.0)
+          # PR or manual run -> draft "preview" release (reused across runs)
+          tagName: ${{ github.event_name == 'push' && github.ref_name || 'preview' }}
           releaseName: 'RedstonePanel'
           releaseBody: 'RedstonePanel — native Minecraft server manager. Installers for Windows, Ubuntu and macOS.'
           releaseDraft: ${{ github.event_name != 'push' }}
