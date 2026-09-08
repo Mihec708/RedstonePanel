@@ -1,9 +1,16 @@
 name: Release
+
 # Trigger rules:
-#   - tag push (v*)         -> real GitHub Release with that tag
-#   - PR update / manual run -> DRAFT 'preview' release (safe to test)
-# Design note: this account blocks some third-party Actions (and strategy.matrix),
-# so this pipeline only uses actions/checkout + preinstalled toolchains + curl.
+#   - tag push (v*)        -> real GitHub Release with that tag
+#   - PR update / manual   -> 'preview' pre-release with test builds (visible on the Releases page)
+#
+# Only actions/checkout (a first-party GitHub action) is used; everything else
+# is plain shell + curl/python, because this account has blocked some
+# third-party actions.
+#
+# Diagnostics: if a build step fails, the logs (preflight + frontend + build)
+# are posted to an issue "CI build log (<platform>)" and printed in the job.
+
 on:
   pull_request:
     types: [opened, synchronize, reopened]
@@ -14,6 +21,7 @@ on:
 
 permissions:
   contents: write
+  issues: write
 
 jobs:
   build-windows:
@@ -21,6 +29,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Preflight
+        shell: bash
+        run: |
+          { node --version; npm --version; npx tauri --version; cargo --version; rustc --version; npm ls @tauri-apps/cli --depth=0; } > preflight.log 2>&1
+          cat preflight.log
 
       - name: Install npm dependencies
         shell: bash
@@ -30,20 +44,31 @@ jobs:
         shell: bash
         run: python scripts/make_icons.py
 
+      - name: Frontend build (isolated)
+        shell: bash
+        run: |
+          if npm run build > frontend.log 2>&1; then
+            echo "FRONTEND OK"
+            tail -n 5 frontend.log
+          else
+            echo "FRONTEND FAILED"
+            tail -n 60 frontend.log
+            python scripts/post_ci_log.py windows
+            exit 1
+          fi
+
       - name: Build Windows installers
         shell: bash
         run: |
           if npx tauri build --bundles nsis,msi > build.log 2>&1; then
             echo "BUILD OK"
-            tail -n 5 build.log
+            tail -n 20 build.log
           else
-            echo "BUILD FAILED - publishing log tail as a draft release for remote inspection"
-            BODY=$(tail -c 6000 build.log | python -c 'import sys,json; print(json.dumps(sys.stdin.read()))')
-            curl -s -X POST -H "Authorization: token $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" \
-              -d "{\"tag_name\":\"preview\",\"name\":\"RedstonePanel build log (windows)\",\"draft\":true,\"body\":$BODY}" \
-              "https://api.github.com/repos/${{ github.repository }}/releases" || true
-            echo "----- tail of build.log -----"
-            tail -n 40 build.log
+            echo "===== build.log (tail) ====="
+            tail -c 15000 build.log
+            echo "===== preflight.log ====="
+            cat preflight.log
+            python scripts/post_ci_log.py windows
             exit 1
           fi
 
@@ -51,11 +76,11 @@ jobs:
         shell: bash
         run: |
           set -e
-          if [ "${{ github.event_name }}" = "push" ]; then TAG="${{ github.ref_name }}"; DRAFT=false; else TAG="preview"; DRAFT=true; fi
+          if [ "${{ github.event_name }}" = "push" ]; then TAG="${{ github.ref_name }}"; PRERELEASE=false; else TAG="preview"; PRERELEASE=true; fi
           API="https://api.github.com/repos/${{ github.repository }}"
           AUTH="Authorization: token $GITHUB_TOKEN"
           ACPT="Accept: application/vnd.github+json"
-          PAYLOAD=$(python -c 'import json; print(json.dumps({"tag_name":"'"$TAG"'","name":"RedstonePanel","draft":'"$DRAFT"',"body":"RedstonePanel - native Minecraft server manager. Installers for Windows, Ubuntu and macOS."}))')
+          PAYLOAD=$(python -c 'import json; print(json.dumps({"tag_name":"'"$TAG"'","name":"RedstonePanel","draft":false,"prerelease":'"$PRERELEASE"',"body":"RedstonePanel - native Minecraft server manager. Download the installer for your OS."}))')
           RESP=$(curl -s -X POST -H "$AUTH" -H "$ACPT" -d "$PAYLOAD" "$API/releases")
           UPLOAD_URL=$(printf '%s' "$RESP" | python -c 'import sys,json; print(json.load(sys.stdin).get("upload_url","").split("?")[0])')
           if [ -z "$UPLOAD_URL" ]; then
@@ -74,6 +99,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Preflight
+        run: |
+          { node --version; npm --version; npx tauri --version; cargo --version; rustc --version; npm ls @tauri-apps/cli --depth=0; pkg-config --modversion webkit2gtk-4.1; } > preflight.log 2>&1
+          cat preflight.log
 
       - name: Install Ubuntu dependencies
         run: |
@@ -95,30 +125,40 @@ jobs:
       - name: Generate app icons
         run: python3 scripts/make_icons.py
 
+      - name: Frontend build (isolated)
+        run: |
+          if npm run build > frontend.log 2>&1; then
+            echo "FRONTEND OK"
+            tail -n 5 frontend.log
+          else
+            echo "FRONTEND FAILED"
+            tail -n 60 frontend.log
+            python3 scripts/post_ci_log.py ubuntu
+            exit 1
+          fi
+
       - name: Build Ubuntu packages
         run: |
           if npx tauri build --bundles appimage,deb > build.log 2>&1; then
             echo "BUILD OK"
-            tail -n 5 build.log
+            tail -n 20 build.log
           else
-            echo "BUILD FAILED - publishing log tail as a draft release for remote inspection"
-            BODY=$(tail -c 6000 build.log | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')
-            curl -s -X POST -H "Authorization: token $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" \
-              -d "{\"tag_name\":\"preview\",\"name\":\"RedstonePanel build log (ubuntu)\",\"draft\":true,\"body\":$BODY}" \
-              "https://api.github.com/repos/${{ github.repository }}/releases" || true
-            echo "----- tail of build.log -----"
-            tail -n 40 build.log
+            echo "===== build.log (tail) ====="
+            tail -c 15000 build.log
+            echo "===== preflight.log ====="
+            cat preflight.log
+            python3 scripts/post_ci_log.py ubuntu
             exit 1
           fi
 
       - name: Publish release
         run: |
           set -e
-          if [ "${{ github.event_name }}" = "push" ]; then TAG="${{ github.ref_name }}"; DRAFT=false; else TAG="preview"; DRAFT=true; fi
+          if [ "${{ github.event_name }}" = "push" ]; then TAG="${{ github.ref_name }}"; PRERELEASE=false; else TAG="preview"; PRERELEASE=true; fi
           API="https://api.github.com/repos/${{ github.repository }}"
           AUTH="Authorization: token $GITHUB_TOKEN"
           ACPT="Accept: application/vnd.github+json"
-          PAYLOAD=$(python3 -c 'import json; print(json.dumps({"tag_name":"'"$TAG"'","name":"RedstonePanel","draft":'"$DRAFT"',"body":"RedstonePanel - native Minecraft server manager. Installers for Windows, Ubuntu and macOS."}))')
+          PAYLOAD=$(python3 -c 'import json; print(json.dumps({"tag_name":"'"$TAG"'","name":"RedstonePanel","draft":false,"prerelease":'"$PRERELEASE"',"body":"RedstonePanel - native Minecraft server manager. Download the installer for your OS."}))')
           RESP=$(curl -s -X POST -H "$AUTH" -H "$ACPT" -d "$PAYLOAD" "$API/releases")
           UPLOAD_URL=$(printf '%s' "$RESP" | python3 -c 'import sys,json; print(json.load(sys.stdin).get("upload_url","").split("?")[0])')
           if [ -z "$UPLOAD_URL" ]; then
@@ -138,36 +178,51 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Preflight
+        run: |
+          { node --version; npm --version; npx tauri --version; cargo --version; rustc --version; npm ls @tauri-apps/cli --depth=0; } > preflight.log 2>&1
+          cat preflight.log
+
       - name: Install npm dependencies
         run: npm install
 
       - name: Generate app icons
         run: python3 scripts/make_icons.py
 
+      - name: Frontend build (isolated)
+        run: |
+          if npm run build > frontend.log 2>&1; then
+            echo "FRONTEND OK"
+            tail -n 5 frontend.log
+          else
+            echo "FRONTEND FAILED"
+            tail -n 60 frontend.log
+            python3 scripts/post_ci_log.py macos
+            exit 1
+          fi
+
       - name: Build macOS DMG
         run: |
           if npx tauri build --bundles dmg > build.log 2>&1; then
             echo "BUILD OK"
-            tail -n 5 build.log
+            tail -n 20 build.log
           else
-            echo "BUILD FAILED - publishing log tail as a draft release for remote inspection"
-            BODY=$(tail -c 6000 build.log | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')
-            curl -s -X POST -H "Authorization: token $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" \
-              -d "{\"tag_name\":\"preview\",\"name\":\"RedstonePanel build log (macos)\",\"draft\":true,\"body\":$BODY}" \
-              "https://api.github.com/repos/${{ github.repository }}/releases" || true
-            echo "----- tail of build.log -----"
-            tail -n 40 build.log
+            echo "===== build.log (tail) ====="
+            tail -c 15000 build.log
+            echo "===== preflight.log ====="
+            cat preflight.log
+            python3 scripts/post_ci_log.py macos
             exit 1
           fi
 
       - name: Publish release
         run: |
           set -e
-          if [ "${{ github.event_name }}" = "push" ]; then TAG="${{ github.ref_name }}"; DRAFT=false; else TAG="preview"; DRAFT=true; fi
+          if [ "${{ github.event_name }}" = "push" ]; then TAG="${{ github.ref_name }}"; PRERELEASE=false; else TAG="preview"; PRERELEASE=true; fi
           API="https://api.github.com/repos/${{ github.repository }}"
           AUTH="Authorization: token $GITHUB_TOKEN"
           ACPT="Accept: application/vnd.github+json"
-          PAYLOAD=$(python3 -c 'import json; print(json.dumps({"tag_name":"'"$TAG"'","name":"RedstonePanel","draft":'"$DRAFT"',"body":"RedstonePanel - native Minecraft server manager. Installers for Windows, Ubuntu and macOS."}))')
+          PAYLOAD=$(python3 -c 'import json; print(json.dumps({"tag_name":"'"$TAG"'","name":"RedstonePanel","draft":false,"prerelease":'"$PRERELEASE"',"body":"RedstonePanel - native Minecraft server manager. Download the installer for your OS."}))')
           RESP=$(curl -s -X POST -H "$AUTH" -H "$ACPT" -d "$PAYLOAD" "$API/releases")
           UPLOAD_URL=$(printf '%s' "$RESP" | python3 -c 'import sys,json; print(json.load(sys.stdin).get("upload_url","").split("?")[0])')
           if [ -z "$UPLOAD_URL" ]; then
@@ -178,5 +233,5 @@ jobs:
           echo "release tag: $TAG"
           for f in $(find src-tauri/target/release/bundle -type f -name "*.dmg"); do
             CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST -H "$AUTH" -H "Content-Type: application/octet-stream" --data-binary "@$f" "$UPLOAD_URL?name=$(basename "$f")")
-            echo "uploaded $(basename "$f")" -> http $CODE
+            echo "uploaded $(basename "$f") -> http $CODE"
           done
