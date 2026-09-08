@@ -7,6 +7,7 @@ import {
   CirclePower,
   Clock3,
   Cloud,
+  FolderOpen,
   FolderTree,
   Gamepad2,
   HardDriveDownload,
@@ -25,7 +26,14 @@ import {
 } from 'lucide-react';
 import './styles.css';
 
-type ServerInfo = { id: string; name: string; running: boolean };
+type ServerInfo = { id: string; name: string; running: boolean; kind: string; version: string; ram_gb: number };
+
+const KIND_LABEL: Record<string, string> = {
+  vanilla: 'Vanilla',
+  paper: 'Paper',
+  bungeecord: 'BungeeCord',
+  custom: 'Custom',
+};
 type ConsoleLine = { id: string; line: string; source: string };
 type FileEntry = { name: string; dir: boolean };
 type Telemetry = { cpu_usage: number; used_memory: number; total_memory: number };
@@ -61,16 +69,46 @@ function App() {
   const [files, setFiles] = useState<FileEntry[]>([]);
   const [openFile, setOpenFile] = useState<string | null>(null);
   const [fileText, setFileText] = useState('');
+  const [ramInfo, setRamInfo] = useState<{ used: number; allocated: number } | null>(null);
+  const [showAdd, setShowAdd] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [newKind, setNewKind] = useState('paper');
+  const [newVersion, setNewVersion] = useState('');
+  const [ramGb, setRamGb] = useState(2);
+  const [versions, setVersions] = useState<string[]>([]);
+  const [versionsLoading, setVersionsLoading] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [dlBytes, setDlBytes] = useState(0);
   const consoleRef = useRef<HTMLPreElement>(null);
 
   const selected = servers.find((server) => server.id === selectedId) ?? null;
   const selectedLines = selected ? lines.filter((line) => line.id === selected.id) : [];
+
+  // The polling interval below is created once; keep a live ref to the
+  // currently selected server so it can query per-server RAM.
+  const selRef = useRef<{ id: string | null; running: boolean }>({ id: null, running: false });
+  selRef.current = { id: selectedId, running: Boolean(selected?.running) };
 
   const refreshServers = useCallback(async () => {
     const list = await invoke<ServerInfo[]>('list_servers');
     setServers(list);
     setSelectedId((prev) => (prev && list.some((s) => s.id === prev) ? prev : list[0]?.id ?? null));
     return list;
+  }, []);
+
+  const loadVersions = useCallback(async (kind: string) => {
+    setVersionsLoading(true);
+    setVersions([]);
+    setNewVersion('');
+    try {
+      const list = await invoke<string[]>('list_versions', { kind });
+      setVersions(list);
+      setNewVersion(list[0] ?? '');
+    } catch {
+      setVersions([]);
+    } finally {
+      setVersionsLoading(false);
+    }
   }, []);
 
   const loadFiles = useCallback(async (id: string) => {
@@ -98,16 +136,34 @@ function App() {
     listen<{ id: string; code: number }>('server-exit', () => {
       refreshServers().catch(() => {});
     }).then((off) => unlisteners.push(off)).catch(() => {});
-    const poll = setInterval(() => {
-      invoke<Telemetry>('host_telemetry').then((t) => {
-        setTelemetry(t);
-        const cpuPct = t.cpu_usage ?? 0;
-        const ramPct = t.total_memory > 0 ? (t.used_memory / t.total_memory) * 100 : 0;
-        setHistory((h) => ({
-          cpu: [...h.cpu, cpuPct].slice(-12),
-          ram: [...h.ram, ramPct].slice(-12),
-        }));
-      }).catch(() => {});
+    const poll = setInterval(async () => {
+      const t = await invoke<Telemetry>('host_telemetry').catch(() => null);
+      if (!t) return;
+      setTelemetry(t);
+      let ramUsed: number | null = null;
+      let ramAlloc: number | null = null;
+      const s = selRef.current;
+      if (s.id && s.running) {
+        try {
+          const r = await invoke<{ used: number; allocated: number }>('server_ram', { id: s.id });
+          ramUsed = r.used;
+          ramAlloc = r.allocated;
+        } catch {
+          /* not running / no process info yet */
+        }
+      }
+      const cpuPct = t.cpu_usage ?? 0;
+      const ramPct =
+        ramUsed != null && ramAlloc
+          ? (ramUsed / ramAlloc) * 100
+          : t.total_memory > 0
+            ? (t.used_memory / t.total_memory) * 100
+            : 0;
+      setRamInfo(ramUsed != null && ramAlloc ? { used: ramUsed, allocated: ramAlloc } : null);
+      setHistory((h) => ({
+        cpu: [...h.cpu, cpuPct].slice(-12),
+        ram: [...h.ram, Math.min(ramPct, 100)].slice(-12),
+      }));
     }, 3000);
     return () => {
       clearInterval(poll);
@@ -160,17 +216,54 @@ function App() {
     }
   }
 
-  async function addServer() {
-    const name = window.prompt('Name your new server (letters, numbers, dashes):');
-    if (!name) return;
+  function openAddModal() {
+    setShowAdd(true);
     setError(null);
     setNotice(null);
+    setDlBytes(0);
+    loadVersions(newKind);
+  }
+
+  async function createAndDownload() {
+    const name = newName.trim();
+    if (!name || creating) return;
+    setCreating(true);
+    setError(null);
+    setNotice(null);
+    setDlBytes(0);
     try {
-      const created = await invoke<ServerInfo>('create_server', { name });
-      setNotice(`${created.name} created — drop a .jar file into its folder, then press Start`);
+      const off = await listen<{ id: string; bytes: number }>('download-progress', (event) =>
+        setDlBytes(event.payload.bytes),
+      ).catch(() => null);
+      const created = await invoke<ServerInfo>('create_server', {
+        name,
+        kind: newKind,
+        version: newVersion,
+        ramGb: Number(ramGb) || 2,
+      });
+      const msg = await invoke<string>('download_server', {
+        id: created.id,
+        kind: newKind,
+        version: newVersion,
+      });
+      if (off) off();
+      setShowAdd(false);
+      setNewName('');
+      setNotice(`${created.name}: ${msg}`);
       await refreshServers();
       setSelectedId(created.id);
       loadFiles(created.id);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  async function openFolder(id: string) {
+    setError(null);
+    try {
+      await invoke('open_server_dir', { id });
     } catch (e) {
       setError(String(e));
     }
@@ -231,12 +324,18 @@ function App() {
           {servers.map((server) => (
             <button key={server.id} className={server.id === selectedId ? 'server-card active' : 'server-card'} onClick={() => setSelectedId(server.id)}>
               <Server size={18} className={server.running ? 'dot-on' : 'dot-off'} />
-              <span><strong>{server.name}</strong><small>{server.running ? 'Running' : 'Stopped'} · {server.id}</small></span>
+              <span>
+                <strong>{server.name}</strong>
+                <small>{server.running ? 'Running' : 'Stopped'}</small>
+                {KIND_LABEL[server.kind] && server.version && (
+                  <small className="server-meta">{KIND_LABEL[server.kind]} {server.version} · {server.ram_gb} GB RAM</small>
+                )}
+              </span>
             </button>
           ))}
         </nav>
         {dataDir && <div className="storage-line" title={dataDir}>Storage: {dataDir}</div>}
-        <button className="add-server" onClick={addServer}><Plus size={24} /> Add server</button>
+        <button className="add-server" onClick={openAddModal} disabled={creating}><Plus size={24} /> Add server</button>
       </aside>
 
       <section className="workspace">
@@ -244,7 +343,7 @@ function App() {
           <div>
             <p className="eyebrow">{selected ? `servers/${selected.id}` : 'no server selected'}</p>
             <h1>{selected?.name ?? 'RedstonePanel'}</h1>
-            <p>A native local-hosting control center — pick a server, drop in a jar, and run it from your desktop.</p>
+            <p>A native local-hosting control center — pick a server and run it from your desktop.</p>
           </div>
           <div className="power-actions">
             <button disabled={!selected || busy} onClick={() => power('start')}><Play size={16} />Start</button>
@@ -259,7 +358,16 @@ function App() {
 
         <section className="grid three">
           <Metric title="Host CPU" value={telemetry ? `${telemetry.cpu_usage.toFixed(1)}%` : '—'} tone="red" values={cpuValues} />
-          <Metric title="Host RAM" value={telemetry ? `${ramPct}% · ${(telemetry.used_memory / 2 ** 30).toFixed(1)}/${(telemetry.total_memory / 2 ** 30).toFixed(1)} GB` : '—'} tone="gold" values={ramValues} />
+          <Metric
+            title={ramInfo ? 'Server RAM' : 'Host RAM'}
+            value={ramInfo
+              ? `${(ramInfo.used / 2 ** 30).toFixed(1)} / ${(ramInfo.allocated / 2 ** 30).toFixed(1)} GB`
+              : telemetry
+                ? `${ramPct}% · ${(telemetry.used_memory / 2 ** 30).toFixed(1)}/${(telemetry.total_memory / 2 ** 30).toFixed(1)} GB`
+                : '—'}
+            tone="gold"
+            values={ramValues}
+          />
           <Metric title="Servers" value={selected ? (selected.running ? 'ONLINE' : 'OFFLINE') : '—'} tone="green" values={onlineValues.length ? onlineValues : [0, 0]} />
         </section>
 
@@ -282,7 +390,12 @@ function App() {
               <button disabled={!selected || !command.trim()} onClick={sendCommand}>Send</button>
             </div>
           </Panel>
-          <Panel icon={<FolderTree />} title={`Server Files${selected ? ` — ${selected.name}` : ''}`} action={<span className="planned-chip live">LIVE</span>}>
+          <Panel icon={<FolderTree />} title={`Server Files${selected ? ` — ${selected.name}` : ''}`} action={
+            <span className="panel-actions">
+              {selected && <button onClick={() => openFolder(selected.id)}><FolderOpen size={14} /> Open folder</button>}
+              <span className="planned-chip live">LIVE</span>
+            </span>
+          }>
             <div className="tree">
               {files.length === 0 && <span className="toolbar-hint">No files yet — this is the server folder.</span>}
               {files.map((file) => (
@@ -328,6 +441,42 @@ function App() {
           <Panel icon={<Cloud />} title="No-Router Port Forwarding" planned><label className="share-toggle"><input type="checkbox" /> Enable playit.gg / Cloudflared tunnel</label><div className="share-url">example.playit.gg:25565</div></Panel>
         </section>
       </section>
+
+      {showAdd && (
+        <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !creating) setShowAdd(false); }}>
+          <div className="modal">
+            <h2>Add a server</h2>
+            <label>Name<input value={newName} placeholder="my-minecraft-server" onChange={(event) => setNewName(event.target.value)} disabled={creating} /></label>
+            <div className="form-grid">
+              <label>Server type
+                <select value={newKind} disabled={creating} onChange={(event) => { const kind = event.target.value; setNewKind(kind); loadVersions(kind); }}>
+                  <option value="paper">Paper</option>
+                  <option value="vanilla">Vanilla</option>
+                  <option value="bungeecord">BungeeCord</option>
+                </select>
+              </label>
+              <label>Version
+                <select value={newVersion} disabled={versionsLoading || creating || newKind === 'paper' || newKind === 'bungeecord'} onChange={(event) => setNewVersion(event.target.value)}>
+                  {newKind === 'paper' && <option value="latest">Latest stable (auto)</option>}
+                  {newKind === 'bungeecord' && <option value="latest">Latest</option>}
+                  {newKind === 'vanilla' && (versionsLoading ? <option value="">Loading versions…</option> : versions.map((v) => <option key={v} value={v}>{v}</option>))}
+                </select>
+              </label>
+              <label>RAM (GB)
+                <input type="number" min={1} max={32} value={ramGb} disabled={creating} onChange={(event) => setRamGb(Number(event.target.value))} />
+              </label>
+            </div>
+            <p className="toolbar-hint">The server jar is downloaded automatically from the official source — no manual setup.</p>
+            {creating && dlBytes > 0 && <div className="dl-progress">Downloading… {(dlBytes / 2 ** 20).toFixed(1)} MB</div>}
+            <div className="modal-actions">
+              <button disabled={creating} onClick={() => setShowAdd(false)}>Cancel</button>
+              <button className="primary" disabled={creating || !newName.trim()} onClick={createAndDownload}>
+                {creating ? 'Creating & downloading…' : 'Create & download'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }

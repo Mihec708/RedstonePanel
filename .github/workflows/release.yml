@@ -8,13 +8,12 @@ name: Release
 # is plain shell + curl/python, because this account has blocked some
 # third-party actions.
 #
-# Publishing: each platform job uses the `gh` CLI (preinstalled on all
-# runners, verified working in the upload-test matrix) to create the release
-# (or reuse it if a sibling job got there first) and upload that platform's
-# artifacts. Safe to run in parallel across the three jobs.
+# Publishing: each platform job calls scripts/publish_release.py, which creates
+# the release (or fetches it if a sibling job got there first) and uploads that
+# platform's artifacts. Safe to run in parallel across the three jobs.
 #
 # Diagnostics: the publish phase emits check-run annotations (always readable,
-# no write permission needed) so failures are visible without CI logs.
+# no write permission needed) plus a paste.rs URL and, best-effort, an issue.
 
 on:
   pull_request:
@@ -245,6 +244,10 @@ jobs:
 
   build-macos:
     runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [aarch64-apple-darwin, x86_64-apple-darwin]
     permissions:
       contents: write
       issues: write
@@ -253,6 +256,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Add Rust target
+        run: rustup target add ${{ matrix.arch }}
 
       - name: Install npm dependencies
         run: npm install
@@ -286,7 +292,7 @@ jobs:
 
       - name: Build macOS DMG
         run: |
-          if npx tauri build --bundles dmg > build.log 2>&1; then
+          if npx tauri build --bundles dmg --target ${{ matrix.arch }} > build.log 2>&1; then
             echo "BUILD OK"
             tail -n 20 build.log
           else
@@ -298,8 +304,19 @@ jobs:
             exit 1
           fi
 
+      - name: Ad-hoc codesign
+        run: |
+          APP=src-tauri/target/${{ matrix.arch }}/release/bundle/macos/RedstonePanel.app
+          if codesign --force --deep --sign - "$APP" > codesign.log 2>&1; then
+            echo "CODESIGN OK"
+            codesign -dv "$APP" 2>&1 | head -n 5
+          else
+            echo "CODESIGN FAILED (non-fatal)"
+            cat codesign.log
+          fi
+
       - name: Publish marker
-        run: echo "::notice title=RedstonePanel-marker::macos reached publish phase bash=$BASH_VERSION"
+        run: echo "::notice title=RedstonePanel-marker::macos-${{ matrix.arch }} reached publish phase bash=$BASH_VERSION"
 
       - name: Publish release
         env:
@@ -316,7 +333,7 @@ jobs:
             exit 2
           fi
           if [ "${{ github.event_name }}" = "push" ]; then TAG="${{ github.ref_name }}"; PRERELEASE=""; else TAG="preview"; PRERELEASE="--prerelease"; fi
-          BUNDLE=src-tauri/target/release/bundle
+          BUNDLE=src-tauri/target/${{ matrix.arch }}/release/bundle
           FILES=$(find "$BUNDLE" -type f -name '*.dmg' 2>/dev/null)
           echo "::notice title=RedstonePanel-publish::macos tag=$TAG files=$(echo $FILES | tr '\n' ' ')"
           if [ -z "$FILES" ]; then

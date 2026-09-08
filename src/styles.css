@@ -68,4 +68,14 @@ button:disabled { opacity:.55; cursor:not-allowed; }
 .file-active { outline:2px solid #b96d68; background:#fff7f2 !important; }
 .save-row { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:10px; }
 .avatar { width:34px; height:34px; border-radius:8px; display:grid; place-items:center; background:#eadfce; color:#7b2c2b; font-weight:700; }
+.server-meta { color:#7b2c2b; font-weight:600; }
+.panel-actions { margin-left:auto; display:flex; align-items:center; gap:8px; }
+.panel-actions button { display:flex; align-items:center; gap:6px; padding:7px 10px; border-radius:10px; background:#eadfce; color:#7b2c2b; font-size:.85rem; }
+.modal-backdrop { position:fixed; inset:0; background:#2d2926a8; display:grid; place-items:center; z-index:50; padding:20px; }
+.modal { width:min(460px, 100%); background:#fffaf2; border-radius:24px; padding:24px; box-shadow:var(--shadow); display:grid; gap:14px; }
+.modal h2 { margin:0; font-family:Minecraftia, monospace; }
+.modal label { display:grid; gap:6px; color:var(--muted); }
+.modal input { border:1px solid var(--line); border-radius:12px; padding:10px; background:#fff; }
+.dl-progress { padding:10px 12px; border-radius:12px; background:#e7efe2; color:#3c5a3e; font-size:.9rem; }
+.modal-actions { display:flex; justify-content:flex-end; gap:10px; }
 @media (max-width: 1100px) { .app-shell { flex-direction:column; } .sidebar { position:relative; width:auto; height:auto; } .grid.two, .grid.three { grid-template-columns:1fr; } .hero { align-items:flex-start; flex-direction:column; } }
