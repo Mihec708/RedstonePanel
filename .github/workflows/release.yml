@@ -3,12 +3,24 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
 jobs:
-  probe:
-    strategy:
-      matrix:
-        - name: Ubuntu
-          os: ubuntu-latest
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Probe
+        run: echo "windows job OK"
+  build-ubuntu:
     runs-on: ubuntu-latest
     steps:
-      - name: Say hello
-        run: echo "matrix without fail-fast OK / ${{ matrix.name }}"
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Probe
+        run: echo "ubuntu job OK"
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Probe
+        run: echo "macos job OK"
