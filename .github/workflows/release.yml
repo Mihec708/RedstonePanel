@@ -9,7 +9,7 @@ jobs:
       matrix:
         - name: Ubuntu
           os: ubuntu-latest
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     steps:
       - name: Say hello
-        run: echo "matrix probe OK on ${{ runner.os }} / ${{ matrix.name }}"
+        run: echo "static runs-on with matrix OK / ${{ matrix.name }}"
