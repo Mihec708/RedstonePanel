@@ -90,12 +90,17 @@ jobs:
       - name: Publish release
         shell: bash
         run: |
-          echo "::notice title=RedstonePanel-publish::windows step started bash=$BASH_VERSION pwd=$(pwd)"
+          set +e
+          echo "::notice title=RedstonePanel-publish::windows step started bash=$BASH_VERSION"
           PYTHON=python
           if [ ! -f scripts/publish_release.py ]; then
-            echo "::error title=RedstonePanel-publish-diag::scripts/publish_release.py MISSING; pwd=$(pwd); ls=$(ls -la 2>&1 | head -20 | tr '\n' ' ')"
+            echo "::error title=RedstonePanel-publish-diag::windows scripts/publish_release.py MISSING; pwd=$(pwd)"
             exit 2
           fi
+          TOKEN_STATE=missing
+          [ -n "$GITHUB_TOKEN" ] && TOKEN_STATE=set
+          REPO=${GITHUB_REPOSITORY:-MISSING}
+          echo "::notice title=RedstonePanel-publish::windows pre-check python=$(command -v $PYTHON || echo NOTFOUND) token=$TOKEN_STATE repo=$REPO"
           if [ "${{ github.event_name }}" = "push" ]; then TAG="${{ github.ref_name }}"; PRE=""; else TAG="preview"; PRE="--prerelease"; fi
           echo "Publishing release tag: $TAG"
           $PYTHON scripts/publish_release.py --tag "$TAG" $PRE --bundle-dir src-tauri/target/release/bundle --ext .exe --ext .msi > publish_diag.txt 2>&1
@@ -189,12 +194,17 @@ jobs:
 
       - name: Publish release
         run: |
-          echo "::notice title=RedstonePanel-publish::ubuntu step started bash=$BASH_VERSION pwd=$(pwd)"
+          set +e
+          echo "::notice title=RedstonePanel-publish::ubuntu step started bash=$BASH_VERSION"
           PYTHON=python3
           if [ ! -f scripts/publish_release.py ]; then
-            echo "::error title=RedstonePanel-publish-diag::scripts/publish_release.py MISSING; pwd=$(pwd); ls=$(ls -la 2>&1 | head -20 | tr '\n' ' ')"
+            echo "::error title=RedstonePanel-publish-diag::ubuntu scripts/publish_release.py MISSING; pwd=$(pwd)"
             exit 2
           fi
+          TOKEN_STATE=missing
+          [ -n "$GITHUB_TOKEN" ] && TOKEN_STATE=set
+          REPO=${GITHUB_REPOSITORY:-MISSING}
+          echo "::notice title=RedstonePanel-publish::ubuntu pre-check python=$(command -v $PYTHON || echo NOTFOUND) token=$TOKEN_STATE repo=$REPO"
           if [ "${{ github.event_name }}" = "push" ]; then TAG="${{ github.ref_name }}"; PRE=""; else TAG="preview"; PRE="--prerelease"; fi
           echo "Publishing release tag: $TAG"
           $PYTHON scripts/publish_release.py --tag "$TAG" $PRE --bundle-dir src-tauri/target/release/bundle --ext .AppImage --ext .deb > publish_diag.txt 2>&1
@@ -273,12 +283,17 @@ jobs:
 
       - name: Publish release
         run: |
-          echo "::notice title=RedstonePanel-publish::macos step started bash=$BASH_VERSION pwd=$(pwd)"
+          set +e
+          echo "::notice title=RedstonePanel-publish::macos step started bash=$BASH_VERSION"
           PYTHON=python3
           if [ ! -f scripts/publish_release.py ]; then
-            echo "::error title=RedstonePanel-publish-diag::scripts/publish_release.py MISSING; pwd=$(pwd); ls=$(ls -la 2>&1 | head -20 | tr '\n' ' ')"
+            echo "::error title=RedstonePanel-publish-diag::macos scripts/publish_release.py MISSING; pwd=$(pwd)"
             exit 2
           fi
+          TOKEN_STATE=missing
+          [ -n "$GITHUB_TOKEN" ] && TOKEN_STATE=set
+          REPO=${GITHUB_REPOSITORY:-MISSING}
+          echo "::notice title=RedstonePanel-publish::macos pre-check python=$(command -v $PYTHON || echo NOTFOUND) token=$TOKEN_STATE repo=$REPO"
           if [ "${{ github.event_name }}" = "push" ]; then TAG="${{ github.ref_name }}"; PRE=""; else TAG="preview"; PRE="--prerelease"; fi
           echo "Publishing release tag: $TAG"
           $PYTHON scripts/publish_release.py --tag "$TAG" $PRE --bundle-dir src-tauri/target/release/bundle --ext .dmg > publish_diag.txt 2>&1
