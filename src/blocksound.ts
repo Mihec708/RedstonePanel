@@ -1,6 +1,11 @@
-// Synthesized "redstone block" sounds using the Web Audio API.
-// No audio files are bundled — everything is generated on the fly, so it
-// works fully offline inside the Tauri app.
+// Redstone block sounds for the 15-click logo easter egg.
+//
+// Two sound sources, in priority order:
+// 1. Files dropped into `src/sounds/` (.ogg .mp3 .wav .m4a .flac .webm .aac).
+//    They are picked up automatically at build time — a random one plays,
+//    and adding new files requires no code changes.
+// 2. Synthesized Web Audio fallbacks (below), used when the folder has no
+//    sound files, so the easter egg always works.
 
 let ctx: AudioContext | null = null;
 
@@ -67,15 +72,55 @@ const BLOCKS: Block[] = [
   { name: 'Redstone click', play: () => { clack(0.03, 0.4, 3200); } },
 ];
 
-let last = -1;
+let lastBlock = -1;
 
-/** Play a random redstone block sound (piston, dispenser, hopper, …). Returns the block name. */
-export function playRandomBlockSound(): string {
-  // Avoid the same block twice in a row.
+/** Play a random synthesized block sound (never the same one twice in a row). Returns its name. */
+function playSynth(): string {
   let idx = Math.floor(Math.random() * BLOCKS.length);
-  if (BLOCKS.length > 1 && idx === last) idx = (idx + 1) % BLOCKS.length;
-  last = idx;
+  if (BLOCKS.length > 1 && idx === lastBlock) idx = (idx + 1) % BLOCKS.length;
+  lastBlock = idx;
   const block = BLOCKS[idx];
   block.play();
   return block.name;
+}
+
+// ---- Sound files dropped into src/sounds/ ----
+// Vite bundles every matching file and hands us its URL. Adding or removing
+// files in that folder requires no changes here.
+const FILE_SOUNDS: string[] = Object.values(
+  import.meta.glob('./sounds/*.{ogg,mp3,wav,m4a,flac,webm,aac}', {
+    eager: true,
+    query: '?url',
+    import: 'default',
+  }),
+) as string[];
+
+let lastFile = -1;
+let currentAudio: HTMLAudioElement | null = null;
+
+/** Play a random bundled sound file (never the same one twice in a row). */
+function playRandomFile(): void {
+  let idx = Math.floor(Math.random() * FILE_SOUNDS.length);
+  if (FILE_SOUNDS.length > 1 && idx === lastFile) idx = (idx + 1) % FILE_SOUNDS.length;
+  lastFile = idx;
+  if (currentAudio) currentAudio.pause();
+  const el = new Audio(FILE_SOUNDS[idx]);
+  currentAudio = el;
+  el.volume = 0.9;
+  void el.play().catch(() => {
+    // File failed to decode/play — fall back to a synthesized sound.
+    playSynth();
+  });
+}
+
+/**
+ * Play a random redstone block sound: a file from src/sounds/ if any exist,
+ * otherwise a synthesized block sound. Returns the name of the sound used.
+ */
+export function playRandomBlockSound(): string {
+  if (FILE_SOUNDS.length > 0) {
+    playRandomFile();
+    return 'sound file';
+  }
+  return playSynth();
 }
