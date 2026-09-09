@@ -58,10 +58,6 @@ jobs:
           } > preflight.log 2>&1
           cat preflight.log
 
-      - name: Generate app icons
-        shell: bash
-        run: python scripts/make_icons.py
-
       - name: Frontend build (isolated)
         shell: bash
         run: |
@@ -173,9 +169,6 @@ jobs:
           } > preflight.log 2>&1
           cat preflight.log
 
-      - name: Generate app icons
-        run: python3 scripts/make_icons.py
-
       - name: Frontend build (isolated)
         run: |
           if npm run build > frontend.log 2>&1; then
@@ -274,9 +267,6 @@ jobs:
             npm ls @tauri-apps/cli --depth=0 || echo "npm ls @tauri-apps/cli: FAILED"
           } > preflight.log 2>&1
           cat preflight.log
-
-      - name: Generate app icons
-        run: python3 scripts/make_icons.py
 
       - name: Frontend build (isolated)
         run: |
