@@ -255,6 +255,12 @@ fn create_server(
     let ram = ram_gb.clamp(1, 32);
     let dir = data_root(&app)?.join("servers").join(&id);
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    // Preseed a minimal server.properties so the very first start does not
+    // shut the server down on the EULA prompt.
+    let props = dir.join("server.properties");
+    if !props.exists() {
+        fs::write(&props, "eula=true\n").map_err(|e| e.to_string())?;
+    }
     let meta = ServerMeta {
         name: cleaned.clone(),
         kind: kind.clone(),
@@ -353,6 +359,8 @@ fn do_start(app: &AppHandle, state: &Arc<ServerState>, id: &str) -> Result<Strin
     command
         .args([format!("-Xms{ram}G"), format!("-Xmx{ram}G"), "-jar".to_string()])
         .arg(&jar)
+        // --nogui: never open the integrated in-browser server window.
+        .arg("--nogui")
         .current_dir(&dir)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -522,6 +530,22 @@ fn list_versions(kind: String) -> Result<Vec<String>, String> {
                 .collect())
         }
         "paper" => Ok(vec!["latest".to_string()]),
+        "purpur" => {
+            // Purpur is a Paper fork with a live API covering 1.14.1 -> current.
+            let json: serde_json::Value = serde_json::from_str(&curl_get(
+                "https://api.purpurmc.org/v2/purpur/",
+            )?)
+            .map_err(|e| format!("could not parse the Purpur version list: {e}"))?;
+            let mut versions: Vec<String> = json["versions"]
+                .as_array()
+                .ok_or("unexpected Purpur manifest shape")?
+                .iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .filter(|v| !v.is_empty())
+                .collect();
+            versions.reverse(); // newest first
+            Ok(versions)
+        }
         "bungeecord" => {
             // "latest" always works; then recent Jenkins build numbers (newest first).
             let mut out = vec!["latest".to_string()];
@@ -587,6 +611,11 @@ fn resolve_download(kind: &str, version: &str) -> Result<(String, String, String
             let (url, name, version) = paper_latest()?;
             Ok((url, name, version))
         }
+        "purpur" => Ok((
+            format!("https://api.purpurmc.org/v2/purpur/{version}/latest/download"),
+            format!("purpur-{version}.jar"),
+            version.to_string(),
+        )),
         "bungeecord" => {
             let build = if version.trim().is_empty() || version == "latest" {
                 "lastSuccessfulBuild".to_string()
@@ -604,7 +633,7 @@ fn resolve_download(kind: &str, version: &str) -> Result<(String, String, String
             Ok((url, "BungeeCord.jar".to_string(), label))
         },
         other => Err(format!(
-            "unknown server type: {other} (supported: vanilla, paper, bungeecord)"
+            "unknown server type: {other} (supported: vanilla, paper, purpur, bungeecord)"
         )),
     }
 }
@@ -1094,6 +1123,60 @@ fn list_whitelist(app: AppHandle, id: String) -> Result<Vec<PlayerInfo>, String>
         .collect())
 }
 
+// --------------------------------------------------------- whitelist toggle
+
+/// Reads `white-list` from the server's properties file.
+#[tauri::command]
+fn whitelist_status(app: AppHandle, id: String) -> Result<bool, String> {
+    let dir = server_dir_for(&app, &id)?;
+    let text = fs::read_to_string(dir.join("server.properties")).unwrap_or_default();
+    for line in text.lines() {
+        let Some(eq) = line.find('=') else {
+            continue;
+        };
+        if line[..eq].trim() == "white-list" {
+            return Ok(line[eq + 1..].trim() == "true");
+        }
+    }
+    Ok(false)
+}
+
+/// Flips `white-list` in server.properties and, if the server is running,
+/// also sends the live `whitelist on/off` console command.
+#[tauri::command]
+fn set_whitelist(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<ServerState>>,
+    id: String,
+    enabled: bool,
+) -> Result<String, String> {
+    let dir = server_dir_for(&app, &id)?;
+    let path = dir.join("server.properties");
+    let text = fs::read_to_string(&path).unwrap_or_default();
+    let mut found = false;
+    let mut lines: Vec<String> = Vec::new();
+    for line in text.lines() {
+        let Some(eq) = line.find('=') else {
+            lines.push(line.to_string());
+            continue;
+        };
+        if line[..eq].trim() == "white-list" {
+            found = true;
+            lines.push(format!("white-list={}", if enabled { "true" } else { "false" }));
+        } else {
+            lines.push(line.to_string());
+        }
+    }
+    if !found {
+        lines.push(format!("white-list={}", if enabled { "true" } else { "false" }));
+    }
+    fs::write(&path, format!("{}\n", lines.join("\n"))).map_err(|e| e.to_string())?;
+    if state.running.lock().map_err(|e| e.to_string())?.contains_key(&id) {
+        let _ = send_line(&state, &id, if enabled { "whitelist on" } else { "whitelist off" });
+    }
+    Ok(format!("whitelist turned {}", if enabled { "on" } else { "off" }))
+}
+
 // ------------------------------------------------------------- plugins
 
 /// Downloads a plugin jar into the server folder (Modrinth file url).
@@ -1200,7 +1283,10 @@ fn main() {
         ready: false,
     }));
     let scheduler_state = Arc::clone(&state);
-    tauri::Builder::default()
+    // Clone for the exit handler: when the app closes, kill every running
+    // server so nothing is left orphaned in the background.
+    let exit_state = Arc::clone(&state);
+    let app = tauri::Builder::default()
         .manage(state)
         .manage(host)
         .invoke_handler(tauri::generate_handler![
@@ -1221,6 +1307,8 @@ fn main() {
             write_file,
             list_players,
             list_whitelist,
+            whitelist_status,
+            set_whitelist,
             create_backup,
             list_backups,
             restore_backup,
@@ -1234,6 +1322,18 @@ fn main() {
             spawn_scheduler(app.handle().clone(), scheduler_state);
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("failed to run RedstonePanel desktop app");
+        .build(tauri::generate_context!())
+        .expect("failed to build RedstonePanel desktop app");
+
+    app.run(move |_app, event| {
+        if let tauri::RunEvent::Exit = event {
+            if let Ok(map) = exit_state.running.lock() {
+                for entry in map.values() {
+                    if let Ok(mut child) = entry.child.lock() {
+                        let _ = child.kill();
+                    }
+                }
+            }
+        }
+    });
 }

@@ -48,6 +48,9 @@ export const serverStats = (id: string) =>
 export const listPlayers = (id: string) => invoke<PlayerInfo[]>('list_players', { id });
 export const listWhitelist = (id: string) =>
   invoke<PlayerInfo[]>('list_whitelist', { id });
+export const whitelistStatus = (id: string) => invoke<boolean>('whitelist_status', { id });
+export const setWhitelist = (id: string, enabled: boolean) =>
+  invoke<string>('set_whitelist', { id, enabled });
 
 // ---- backups ----
 export const createBackup = (id: string) => invoke<string>('create_backup', { id });

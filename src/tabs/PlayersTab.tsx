@@ -61,10 +61,12 @@ function PlayerRow({ player, online }: { player: PlayerInfo; online: boolean }) 
 }
 
 export function PlayersTab() {
-  const { selected, sendCommand, selectedLines } = useApp();
+  const { selected, sendCommand, selectedLines, setError, setNotice } = useApp();
   const [past, setPast] = useState<PlayerInfo[]>([]);
   const [whitelist, setWhitelist] = useState<PlayerInfo[]>([]);
   const [wlName, setWlName] = useState('');
+  const [wlEnabled, setWlEnabled] = useState(false);
+  const [wlToggling, setWlToggling] = useState(false);
 
   const refreshLists = useCallback(async () => {
     if (!selected) return;
@@ -77,6 +79,11 @@ export function PlayersTab() {
       setWhitelist(await api.listWhitelist(selected.id));
     } catch {
       setWhitelist([]);
+    }
+    try {
+      setWlEnabled(await api.whitelistStatus(selected.id));
+    } catch {
+      setWlEnabled(false);
     }
   }, [selected?.id]);
 
@@ -168,13 +175,39 @@ export function PlayersTab() {
         <header>
           <h2>Whitelist</h2>
           <span className="panel-actions">
+            <button
+              type="button"
+              className={`ios-switch ${wlEnabled ? 'on' : ''}`}
+              aria-pressed={wlEnabled}
+              title={wlEnabled ? 'Whitelist is on — click to turn off' : 'Whitelist is off — click to turn on'}
+              disabled={wlToggling}
+              onClick={async () => {
+                if (wlToggling || !selected) return;
+                setWlToggling(true);
+                setError(null);
+                try {
+                  const next = !wlEnabled;
+                  const msg = await api.setWhitelist(selected.id, next);
+                  setWlEnabled(next);
+                  setNotice(`${msg} — restart the server to make it stick`);
+                } catch (e) {
+                  setError(String(e));
+                } finally {
+                  setWlToggling(false);
+                }
+              }}
+            >
+              <span className="ios-knob" />
+            </button>
+            <span className="switch-label">{wlEnabled ? 'On' : 'Off'}</span>
             <button onClick={refreshLists}>
               <RefreshCw size={14} /> Refresh
             </button>
           </span>
         </header>
         <p className="toolbar-hint">
-          Add only the players you want to let in (enable <code>white-list=true</code> in Properties).
+          Flip the switch to only let whitelisted players in. Add players below (works while the
+          server is running).
         </p>
         <div className="command-bar">
           <input

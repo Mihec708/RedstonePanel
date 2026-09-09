@@ -50,6 +50,7 @@ export type Tab =
 export const KIND_LABEL: Record<string, string> = {
   vanilla: 'Vanilla',
   paper: 'Paper',
+  purpur: 'Purpur',
   bungeecord: 'BungeeCord',
   custom: 'Custom',
 };

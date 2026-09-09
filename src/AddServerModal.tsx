@@ -100,7 +100,8 @@ export function AddServerModal({ open, onClose }: { open: boolean; onClose: () =
                 loadVersions(kind);
               }}
             >
-              <option value="paper">Paper</option>
+              <option value="paper">Paper (latest only)</option>
+              <option value="purpur">Purpur (Paper fork, all versions)</option>
               <option value="vanilla">Vanilla</option>
               <option value="bungeecord">BungeeCord</option>
             </select>

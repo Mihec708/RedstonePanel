@@ -216,11 +216,13 @@ export function PropertiesTab() {
                 {isBool ? (
                   <button
                     type="button"
-                    className={`prop-toggle ${entry.value === 'true' ? 'on' : 'off'}`}
+                    role="switch"
+                    aria-checked={entry.value === 'true'}
+                    title={key}
+                    className={`ios-switch ${entry.value === 'true' ? 'on' : ''}`}
                     onClick={() => setValue(index, entry.value === 'true' ? 'false' : 'true')}
                   >
-                    <span className="prop-toggle-knob" />
-                    <span>{entry.value === 'true' ? 'ON' : 'OFF'}</span>
+                    <span className="ios-knob" />
                   </button>
                 ) : isInt ? (
                   <input
