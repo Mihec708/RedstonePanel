@@ -107,6 +107,10 @@ function playRandomFile(): void {
   const el = new Audio(FILE_SOUNDS[idx]);
   currentAudio = el;
   el.volume = 0.9;
+  el.onerror = () => {
+    // File failed to load — fall back to a synthesized sound.
+    playSynth();
+  };
   void el.play().catch(() => {
     // File failed to decode/play — fall back to a synthesized sound.
     playSynth();

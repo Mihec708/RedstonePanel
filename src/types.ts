@@ -31,11 +31,16 @@ export type Schedule = {
 };
 
 export type PluginHit = {
+  id: string;
   title: string;
   description: string;
-  downloads: number;
+  author: string;
   icon_url: string | null;
-  slug: string;
+  downloads: number;
+  follows: number;
+  loaders: string[];
+  categories: string[];
+  updated_at: string;
 };
 
 export type Tab =
