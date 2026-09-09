@@ -1,0 +1,61 @@
+export type ServerInfo = {
+  id: string;
+  name: string;
+  running: boolean;
+  kind: string;
+  version: string;
+  ram_gb: number;
+};
+
+export type ConsoleLine = { id: string; line: string; source: string };
+
+export type FileEntry = { name: string; dir: boolean };
+
+export type ServerStats = {
+  cpu: number;
+  ram_used: number;
+  ram_alloc: number;
+  uptime_secs: number;
+};
+
+export type BackupInfo = { name: string; size: number; mtime: number };
+
+export type PlayerInfo = { name: string; uuid: string };
+
+export type Schedule = {
+  sid: number;
+  action: string;
+  next_run: number;
+  repeat: string;
+  command?: string | null;
+};
+
+export type PluginHit = {
+  id: string;
+  title: string;
+  description: string;
+  author: string;
+  icon_url: string | null;
+  downloads: number;
+  follows: number;
+  loaders: string[];
+  categories: string[];
+  updated_at: string;
+};
+
+export type Tab =
+  | 'main'
+  | 'files'
+  | 'plugins'
+  | 'stats'
+  | 'properties'
+  | 'players'
+  | 'backups';
+
+export const KIND_LABEL: Record<string, string> = {
+  vanilla: 'Vanilla',
+  paper: 'Paper',
+  purpur: 'Purpur',
+  bungeecord: 'BungeeCord',
+  custom: 'Custom',
+};

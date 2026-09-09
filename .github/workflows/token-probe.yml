@@ -1,0 +1,41 @@
+name: Token probe
+
+# Read-only probe: reports whether the automatic GITHUB_TOKEN is available
+# for each event type on this account. No writes, no secrets exposed
+# (only lengths / set-missing states are reported).
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Token probe
+        run: |
+          set +e
+          T="${{ secrets.GITHUB_TOKEN }}"
+          V="${{ vars.GITHUB_TOKEN }}"
+          ENV_STATE=missing
+          [ -n "$GITHUB_TOKEN" ] && ENV_STATE=set
+          echo "::notice title=token-probe::event=${{ github.event_name }} ref=${{ github.ref_name }} secrets_ctx_len=${#T} vars_ctx='${V}' env_token=$ENV_STATE repo=${GITHUB_REPOSITORY:-MISSING}"
+          if [ -n "$T" ] && [ -z "$GITHUB_TOKEN" ]; then
+            echo "::notice title=token-probe::secrets context HAS token but env missing - exporting from context"
+            export GITHUB_TOKEN="$T"
+          fi
+          if [ -f scripts/token_selftest.py ] && [ -n "${GITHUB_TOKEN:-}" ]; then
+            echo "--- token_selftest.py output ---"
+            python3 scripts/token_selftest.py 2>&1 | sed 's/^/    /'
+          else
+            echo "::notice title=token-probe::selftest skipped (no usable token or missing script)"
+          fi
+          echo "probe done"

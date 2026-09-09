@@ -1,0 +1,346 @@
+name: Release
+
+# Trigger rules:
+#   - tag push (v*)        -> real GitHub Release with that tag
+#   - PR update / manual   -> 'preview' pre-release with test builds (visible on the Releases page)
+#
+# Only actions/checkout (a first-party GitHub action) is used; everything else
+# is plain shell + curl/python, because this account has blocked some
+# third-party actions.
+#
+# Publishing: each platform job calls scripts/publish_release.py, which creates
+# the release (or fetches it if a sibling job got there first) and uploads that
+# platform's artifacts. Safe to run in parallel across the three jobs.
+#
+# Diagnostics: the publish phase emits check-run annotations (always readable,
+# no write permission needed) plus a paste.rs URL and, best-effort, an issue.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  checks: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+      checks: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install npm dependencies
+        shell: bash
+        run: npm install
+
+      - name: Preflight
+        shell: bash
+        run: |
+          {
+            node --version || echo "node: FAILED"
+            npm --version || echo "npm: FAILED"
+            npx tauri --version || echo "npx tauri: FAILED"
+            cargo --version || echo "cargo: FAILED"
+            rustc --version || echo "rustc: FAILED"
+            npm ls @tauri-apps/cli --depth=0 || echo "npm ls @tauri-apps/cli: FAILED"
+          } > preflight.log 2>&1
+          cat preflight.log
+
+      - name: Frontend build (isolated)
+        shell: bash
+        run: |
+          if npm run build > frontend.log 2>&1; then
+            echo "FRONTEND OK"
+            tail -n 5 frontend.log
+          else
+            echo "FRONTEND FAILED"
+            tail -n 60 frontend.log
+            python scripts/post_ci_log.py windows
+            exit 1
+          fi
+
+      - name: Build Windows installers
+        shell: bash
+        run: |
+          if npx tauri build --bundles nsis,msi > build.log 2>&1; then
+            echo "BUILD OK"
+            tail -n 20 build.log
+          else
+            echo "===== build.log (tail) ====="
+            tail -c 15000 build.log
+            echo "===== preflight.log ====="
+            cat preflight.log
+            python scripts/post_ci_log.py windows
+            exit 1
+          fi
+
+      - name: Publish marker
+        shell: bash
+        run: echo "::notice title=RedstonePanel-marker::windows reached publish phase bash=$BASH_VERSION"
+
+      - name: Publish release
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set +e
+          if [ -z "${GITHUB_TOKEN:-}" ]; then
+            export GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}"
+            echo "::notice title=RedstonePanel-publish::windows token re-injected from secrets context len=${#GITHUB_TOKEN}"
+          fi
+          echo "::notice title=RedstonePanel-publish::windows step started bash=$BASH_VERSION token_len=${#GITHUB_TOKEN}"
+          if [ -z "$GITHUB_TOKEN" ]; then
+            echo "::error title=RedstonePanel-publish-diag::windows NO TOKEN (env and secrets context both empty)"
+            exit 2
+          fi
+          if [ "${{ github.event_name }}" = "push" ]; then TAG="${{ github.ref_name }}"; PRERELEASE=""; else TAG="preview"; PRERELEASE="--prerelease"; fi
+          BUNDLE=src-tauri/target/release/bundle
+          FILES=$(find "$BUNDLE" -type f \( -name '*.exe' -o -name '*.msi' \) 2>/dev/null)
+          echo "::notice title=RedstonePanel-publish::windows tag=$TAG files=$(echo $FILES | tr '\n' ' ')"
+          if [ -z "$FILES" ]; then
+            echo "::error title=RedstonePanel-publish-diag::windows no .exe/.msi artifacts under $BUNDLE"
+            exit 3
+          fi
+          if ! gh release view "$TAG" > /dev/null 2>&1; then
+            gh release create "$TAG" $PRERELEASE --title "RedstonePanel" \
+              --notes "RedstonePanel - native Minecraft server manager. Download the build for your OS." > gh_create.txt 2>&1
+            echo "gh release create RC=$? $(tail -n 2 gh_create.txt)"
+          fi
+          gh release upload "$TAG" $FILES --clobber > gh_upload.txt 2>&1
+          RC=$?
+          echo "::notice title=RedstonePanel-publish::windows gh release upload RC=$RC"
+          if [ $RC -ne 0 ]; then
+            echo "::error title=RedstonePanel-publish-diag::windows RC=$RC $(tail -n 3 gh_upload.txt | tr '\n' ' ')"
+            cat gh_upload.txt
+            exit $RC
+          fi
+          tail -n 5 gh_upload.txt
+
+  build-ubuntu:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+      checks: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Ubuntu dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      - name: Install npm dependencies
+        run: npm install
+
+      - name: Preflight
+        run: |
+          {
+            node --version || echo "node: FAILED"
+            npm --version || echo "npm: FAILED"
+            npx tauri --version || echo "npx tauri: FAILED"
+            cargo --version || echo "cargo: FAILED"
+            rustc --version || echo "rustc: FAILED"
+            npm ls @tauri-apps/cli --depth=0 || echo "npm ls @tauri-apps/cli: FAILED"
+            pkg-config --modversion webkit2gtk-4.1 || echo "webkit2gtk-4.1: FAILED"
+          } > preflight.log 2>&1
+          cat preflight.log
+
+      - name: Frontend build (isolated)
+        run: |
+          if npm run build > frontend.log 2>&1; then
+            echo "FRONTEND OK"
+            tail -n 5 frontend.log
+          else
+            echo "FRONTEND FAILED"
+            tail -n 60 frontend.log
+            python3 scripts/post_ci_log.py ubuntu
+            exit 1
+          fi
+
+      - name: Build Ubuntu packages
+        run: |
+          if npx tauri build --bundles appimage,deb > build.log 2>&1; then
+            echo "BUILD OK"
+            tail -n 20 build.log
+          else
+            echo "===== build.log (tail) ====="
+            tail -c 15000 build.log
+            echo "===== preflight.log ====="
+            cat preflight.log
+            python3 scripts/post_ci_log.py ubuntu
+            exit 1
+          fi
+
+      - name: Publish marker
+        run: echo "::notice title=RedstonePanel-marker::ubuntu reached publish phase bash=$BASH_VERSION"
+
+      - name: Publish release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set +e
+          if [ -z "${GITHUB_TOKEN:-}" ]; then
+            export GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}"
+            echo "::notice title=RedstonePanel-publish::ubuntu token re-injected from secrets context len=${#GITHUB_TOKEN}"
+          fi
+          echo "::notice title=RedstonePanel-publish::ubuntu step started bash=$BASH_VERSION token_len=${#GITHUB_TOKEN}"
+          if [ -z "$GITHUB_TOKEN" ]; then
+            echo "::error title=RedstonePanel-publish-diag::ubuntu NO TOKEN (env and secrets context both empty)"
+            exit 2
+          fi
+          if [ "${{ github.event_name }}" = "push" ]; then TAG="${{ github.ref_name }}"; PRERELEASE=""; else TAG="preview"; PRERELEASE="--prerelease"; fi
+          BUNDLE=src-tauri/target/release/bundle
+          FILES=$(find "$BUNDLE" -type f \( -name '*.AppImage' -o -name '*.deb' \) 2>/dev/null)
+          echo "::notice title=RedstonePanel-publish::ubuntu tag=$TAG files=$(echo $FILES | tr '\n' ' ')"
+          if [ -z "$FILES" ]; then
+            echo "::error title=RedstonePanel-publish-diag::ubuntu no .AppImage/.deb artifacts under $BUNDLE"
+            exit 3
+          fi
+          if ! gh release view "$TAG" > /dev/null 2>&1; then
+            gh release create "$TAG" $PRERELEASE --title "RedstonePanel" \
+              --notes "RedstonePanel - native Minecraft server manager. Download the build for your OS." > gh_create.txt 2>&1
+            echo "gh release create RC=$? $(tail -n 2 gh_create.txt)"
+          fi
+          gh release upload "$TAG" $FILES --clobber > gh_upload.txt 2>&1
+          RC=$?
+          echo "::notice title=RedstonePanel-publish::ubuntu gh release upload RC=$RC"
+          if [ $RC -ne 0 ]; then
+            echo "::error title=RedstonePanel-publish-diag::ubuntu RC=$RC $(tail -n 3 gh_upload.txt | tr '\n' ' ')"
+            cat gh_upload.txt
+            exit $RC
+          fi
+          tail -n 5 gh_upload.txt
+
+  build-macos:
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [aarch64-apple-darwin, x86_64-apple-darwin]
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+      checks: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Add Rust target
+        run: rustup target add ${{ matrix.arch }}
+
+      - name: Install npm dependencies
+        run: npm install
+
+      - name: Preflight
+        run: |
+          {
+            node --version || echo "node: FAILED"
+            npm --version || echo "npm: FAILED"
+            npx tauri --version || echo "npx tauri: FAILED"
+            cargo --version || echo "cargo: FAILED"
+            rustc --version || echo "rustc: FAILED"
+            npm ls @tauri-apps/cli --depth=0 || echo "npm ls @tauri-apps/cli: FAILED"
+          } > preflight.log 2>&1
+          cat preflight.log
+
+      - name: Frontend build (isolated)
+        run: |
+          if npm run build > frontend.log 2>&1; then
+            echo "FRONTEND OK"
+            tail -n 5 frontend.log
+          else
+            echo "FRONTEND FAILED"
+            tail -n 60 frontend.log
+            python3 scripts/post_ci_log.py macos
+            exit 1
+          fi
+
+      - name: Build macOS DMG
+        run: |
+          if npx tauri build --bundles dmg --target ${{ matrix.arch }} > build.log 2>&1; then
+            echo "BUILD OK"
+            tail -n 20 build.log
+          else
+            echo "===== build.log (tail) ====="
+            tail -c 15000 build.log
+            echo "===== preflight.log ====="
+            cat preflight.log
+            python3 scripts/post_ci_log.py macos
+            exit 1
+          fi
+
+      - name: Ad-hoc codesign
+        run: |
+          APP=src-tauri/target/${{ matrix.arch }}/release/bundle/macos/RedstonePanel.app
+          if codesign --force --deep --sign - "$APP" > codesign.log 2>&1; then
+            echo "CODESIGN OK"
+            codesign -dv "$APP" 2>&1 | head -n 5
+          else
+            echo "CODESIGN FAILED (non-fatal)"
+            cat codesign.log
+          fi
+
+      - name: Publish marker
+        run: echo "::notice title=RedstonePanel-marker::macos-${{ matrix.arch }} reached publish phase bash=$BASH_VERSION"
+
+      - name: Publish release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set +e
+          if [ -z "${GITHUB_TOKEN:-}" ]; then
+            export GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}"
+            echo "::notice title=RedstonePanel-publish::macos token re-injected from secrets context len=${#GITHUB_TOKEN}"
+          fi
+          echo "::notice title=RedstonePanel-publish::macos step started bash=$BASH_VERSION token_len=${#GITHUB_TOKEN}"
+          if [ -z "$GITHUB_TOKEN" ]; then
+            echo "::error title=RedstonePanel-publish-diag::macos NO TOKEN (env and secrets context both empty)"
+            exit 2
+          fi
+          if [ "${{ github.event_name }}" = "push" ]; then TAG="${{ github.ref_name }}"; PRERELEASE=""; else TAG="preview"; PRERELEASE="--prerelease"; fi
+          BUNDLE=src-tauri/target/${{ matrix.arch }}/release/bundle
+          FILES=$(find "$BUNDLE" -type f -name '*.dmg' 2>/dev/null)
+          echo "::notice title=RedstonePanel-publish::macos tag=$TAG files=$(echo $FILES | tr '\n' ' ')"
+          if [ -z "$FILES" ]; then
+            echo "::error title=RedstonePanel-publish-diag::macos no .dmg artifact under $BUNDLE"
+            exit 3
+          fi
+          if ! gh release view "$TAG" > /dev/null 2>&1; then
+            gh release create "$TAG" $PRERELEASE --title "RedstonePanel" \
+              --notes "RedstonePanel - native Minecraft server manager. Download the build for your OS." > gh_create.txt 2>&1
+            echo "gh release create RC=$? $(tail -n 2 gh_create.txt)"
+          fi
+          gh release upload "$TAG" $FILES --clobber > gh_upload.txt 2>&1
+          RC=$?
+          echo "::notice title=RedstonePanel-publish::macos gh release upload RC=$RC"
+          if [ $RC -ne 0 ]; then
+            echo "::error title=RedstonePanel-publish-diag::macos RC=$RC $(tail -n 3 gh_upload.txt | tr '\n' ' ')"
+            cat gh_upload.txt
+            exit $RC
+          fi
+          tail -n 5 gh_upload.txt
