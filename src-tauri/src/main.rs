@@ -351,7 +351,7 @@ fn do_start(app: &AppHandle, state: &Arc<ServerState>, id: &str) -> Result<Strin
 
     let mut command = Command::new("java");
     command
-        .args(["-Xms", &format!("{ram}G"), "-Xmx", &format!("{ram}G"), "-jar"])
+        .args([format!("-Xms{ram}G"), format!("-Xmx{ram}G"), "-jar".to_string()])
         .arg(&jar)
         .current_dir(&dir)
         .stdin(Stdio::piped())
@@ -470,7 +470,9 @@ fn send_console(
 /// Send a console line to a running server (used by the scheduler thread).
 fn send_line(state: &Arc<ServerState>, id: &str, line: &str) -> Result<(), String> {
     let mut map = state.running.lock().map_err(|e| e.to_string())?;
-    let entry = map.get_mut(id).ok_or_else(|| "this server is not running".to_string())?;
+    let entry = map
+        .get_mut(id)
+        .ok_or_else(|| "this server is not running".to_string())?;
     let stdin = entry.stdin.as_mut().ok_or_else(|| "no console input".to_string())?;
     writeln!(stdin, "{line}").map_err(|e| e.to_string())?;
     stdin.flush().map_err(|e| e.to_string())?;
@@ -481,7 +483,7 @@ fn send_line(state: &Arc<ServerState>, id: &str, line: &str) -> Result<(), Strin
 
 fn curl_get(url: &str) -> Result<String, String> {
     let out = Command::new("curl")
-        .args(["-sS", "--fail", "--max-time", "60", url])
+        .args(["-sSL", "--fail", "--max-time", "60", url])
         .output()
         .map_err(|e| format!("curl is not available on this machine: {e}"))?;
     if !out.status.success() {
@@ -517,10 +519,25 @@ fn list_versions(kind: String) -> Result<Vec<String>, String> {
                 .filter(|v| v.get("type").and_then(|t| t.as_str()) == Some("release"))
                 .filter_map(|v| v["id"].as_str().map(str::to_string))
                 .filter(|v| !v.is_empty())
-                .take(20)
                 .collect())
         }
-        "paper" | "bungeecord" => Ok(vec!["latest".to_string()]),
+        "paper" => Ok(vec!["latest".to_string()]),
+        "bungeecord" => {
+            // "latest" always works; then recent Jenkins build numbers (newest first).
+            let mut out = vec!["latest".to_string()];
+            if let Ok(text) = curl_get("https://ci.md-5.net/job/BungeeCord/api/json?tree=builds%5Bnumber%5D") {
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+                    if let Some(arr) = json["builds"].as_array() {
+                        for build in arr.iter().take(40) {
+                            if let Some(n) = build["number"].as_u64() {
+                                out.push(n.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(out)
+        }
         other => Err(format!("unknown server type: {other}")),
     }
 }
@@ -570,12 +587,22 @@ fn resolve_download(kind: &str, version: &str) -> Result<(String, String, String
             let (url, name, version) = paper_latest()?;
             Ok((url, name, version))
         }
-        "bungeecord" => Ok((
-            "https://ci.md-5.net/job/BungeeCord/lastSuccessfulBuild/artifact/bootstrap/target/BungeeCord.jar"
-                .to_string(),
-            "BungeeCord.jar".to_string(),
-            "latest".to_string(),
-        )),
+        "bungeecord" => {
+            let build = if version.trim().is_empty() || version == "latest" {
+                "lastSuccessfulBuild".to_string()
+            } else {
+                version.to_string()
+            };
+            let url = format!(
+                "https://ci.md-5.net/job/BungeeCord/{build}/artifact/bootstrap/target/BungeeCord.jar"
+            );
+            let label = if build == "lastSuccessfulBuild" {
+                "latest".to_string()
+            } else {
+                format!("build {version}")
+            };
+            Ok((url, "BungeeCord.jar".to_string(), label))
+        },
         other => Err(format!(
             "unknown server type: {other} (supported: vanilla, paper, bungeecord)"
         )),
