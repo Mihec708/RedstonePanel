@@ -18,9 +18,27 @@ type ModrinthVersion = {
 };
 
 const SEARCH_URL = (query: string) =>
-  `https://api.modrinth.com/v2/search?limit=24` +
+  `https://api.modrinth.com/v2/search?limit=12` +
   `&facets=${encodeURIComponent(JSON.stringify([['project_types:paper-plugin']]))}` +
   (query ? `&query=${encodeURIComponent(query)}` : '');
+
+// Robust JSON fetch: retries on a truncated/failed body so a flaky
+// network blip ("Unterminated string in JSON...") doesn't crash the tab.
+async function fetchJson(url: string, attempts = 2): Promise<unknown> {
+  let lastErr: unknown = new Error('could not read the plugin list');
+  for (let i = 0; i < attempts; i += 1) {
+    const res = await fetch(url, { cache: 'no-store' });
+    if (!res.ok) throw new Error(`Modrinth request failed (${res.status})`);
+    const text = await res.text();
+    try {
+      return JSON.parse(text);
+    } catch (err) {
+      lastErr = err;
+      await new Promise((release) => setTimeout(release, 300));
+    }
+  }
+  throw lastErr;
+}
 
 export function PluginsTab() {
   const { selected, setError, setNotice } = useApp();
@@ -33,11 +51,12 @@ export function PluginsTab() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(SEARCH_URL(q));
-      if (!res.ok) throw new Error(`Modrinth search failed (${res.status})`);
-      const data = (await res.json()) as ModrinthSearchHit[];
+      const payload = (await fetchJson(SEARCH_URL(q))) as unknown;
+      const list: ModrinthSearchHit[] = Array.isArray(payload)
+        ? (payload as ModrinthSearchHit[])
+        : ((payload as { hits?: ModrinthSearchHit[] }).hits ?? []);
       setHits(
-        data.map((h) => ({
+        list.map((h) => ({
           title: h.title,
           description: h.description,
           downloads: h.downloads,
@@ -71,11 +90,9 @@ export function PluginsTab() {
     setError(null);
     setNotice(null);
     try {
-      const res = await fetch(
-        `https://api.modrinth.com/v2/project/${encodeURIComponent(hit.slug)}/version?loaders=${encodeURIComponent(JSON.stringify(['java']))}`,
-      );
-      if (!res.ok) throw new Error(`Could not fetch latest version (${res.status})`);
-      const versions = (await res.json()) as ModrinthVersion[];
+      const versionUrl =
+        `https://api.modrinth.com/v2/project/${encodeURIComponent(hit.slug)}/version?loaders=${encodeURIComponent(JSON.stringify(['java']))}`;
+      const versions = (await fetchJson(versionUrl)) as ModrinthVersion[];
       if (versions.length === 0) throw new Error('No downloadable versions found');
       const file = versions[0].file;
       const result = await api.installPlugin(selected!.id, file.url, file.filename);

@@ -1,11 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { CirclePower, Play, RefreshCw, Square, TerminalSquare } from 'lucide-react';
 import { useApp } from '../AppContext';
-import { renderMcText, stripMcText } from '../mcformat';
+import { renderMcText } from '../mcformat';
 import { KIND_LABEL } from '../types';
 
 export function MainTab() {
-  const { selected, busy, power, sendCommand, selectedLines, stats, motd: motdText } = useApp();
+  const { selected, busy, power, sendCommand, selectedLines, stats } = useApp();
   const [command, setCommand] = useState('');
   const consoleRef = useRef<HTMLPreElement>(null);
 
@@ -38,13 +38,6 @@ export function MainTab() {
               <span className="main-hero-meta">
                 {KIND_LABEL[selected.kind]} {selected.version} · {selected.ram_gb} GB
               </span>
-            )}
-          </div>
-          <div className="motd-strip">
-            {stripMcText(motdText) ? (
-              <span className="motd-text">{renderMcText(motdText)}</span>
-            ) : (
-              <span className="console-empty">No MOTD set — add one in the Properties tab.</span>
             )}
           </div>
           <div className="main-hero-stats">

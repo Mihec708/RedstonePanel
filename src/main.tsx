@@ -21,7 +21,6 @@ import { StatsTab } from './tabs/StatsTab';
 import { PropertiesTab } from './tabs/PropertiesTab';
 import { PlayersTab } from './tabs/PlayersTab';
 import { BackupsTab } from './tabs/BackupsTab';
-import { renderMcText, stripMcText } from './mcformat';
 import type { Tab } from './types';
 import { KIND_LABEL } from './types';
 
@@ -36,7 +35,7 @@ const TABS: Array<{ id: Tab; label: string; icon: React.ReactNode }> = [
 ];
 
 function Workspace() {
-  const { selected, selectServer, servers, error, setError, notice, setNotice, dataDir, motd } = useApp();
+  const { selected, selectServer, servers, error, setError, notice, setNotice, dataDir } = useApp();
   const [tab, setTab] = useState<Tab>('main');
   const [showAdd, setShowAdd] = useState(false);
 
@@ -92,15 +91,6 @@ function Workspace() {
           <div>
             <p className="eyebrow">{selected ? `servers/${selected.id}` : 'no server selected'}</p>
             <h1>{selected?.name ?? 'RedstonePanel'}</h1>
-            {selected && (
-              <div className="motd-strip hero-motd">
-                {stripMcText(motd) ? (
-                  <span className="motd-text">{renderMcText(motd)}</span>
-                ) : (
-                  <span className="console-empty">Set your MOTD in the Properties tab</span>
-                )}
-              </div>
-            )}
             <p>A native local-hosting control center — pick a server and run it from your desktop.</p>
           </div>
           {selected && (

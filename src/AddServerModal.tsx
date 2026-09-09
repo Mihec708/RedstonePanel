@@ -109,18 +109,21 @@ export function AddServerModal({ open, onClose }: { open: boolean; onClose: () =
             Version
             <select
               value={newVersion}
-              disabled={versionsLoading || creating || newKind === 'paper' || newKind === 'bungeecord'}
+              disabled={versionsLoading || creating || newKind === 'paper'}
               onChange={(event) => setNewVersion(event.target.value)}
             >
               {newKind === 'paper' && <option value="latest">Latest stable (auto)</option>}
-              {newKind === 'bungeecord' && <option value="latest">Latest</option>}
-              {newKind === 'vanilla' &&
+              {newKind !== 'paper' &&
                 (versionsLoading ? (
                   <option value="">Loading versions…</option>
                 ) : (
                   versions.map((v) => (
                     <option key={v} value={v}>
-                      {v}
+                      {newKind === 'bungeecord'
+                        ? v === 'latest'
+                          ? 'Latest (auto)'
+                          : `Build #${v}`
+                        : v}
                     </option>
                   ))
                 ))}
