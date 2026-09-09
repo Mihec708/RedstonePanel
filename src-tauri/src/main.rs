@@ -121,6 +121,15 @@ fn save_meta(dir: &Path, meta: &ServerMeta) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+fn server_pid(state: &ServerState, id: &str) -> Result<u32, String> {
+    let running = state.running.lock().map_err(|e| e.to_string())?;
+    let entry = running
+        .get(id)
+        .ok_or_else(|| "this server is not running".to_string())?;
+    let child = entry.child.lock().map_err(|e| e.to_string())?;
+    Ok(child.id())
+}
+
 /// Used / allocated RAM for a running server (JVM RSS vs. the RAM the user
 /// dedicated to it when the server was created).
 #[tauri::command]
@@ -130,14 +139,7 @@ fn server_ram(
     state: tauri::State<'_, Arc<ServerState>>,
     id: String,
 ) -> Result<ServerRam, String> {
-    let pid = {
-        let running = state.running.lock().map_err(|e| e.to_string())?;
-        let entry = running
-            .get(&id)
-            .ok_or_else(|| "this server is not running".to_string())?;
-        let child = entry.child.lock().map_err(|e| e.to_string())?;
-        child.id()
-    };
+    let pid = server_pid(&state, &id)?;
     let dir = data_root(&app)?.join("servers").join(&id);
     let allocated = load_meta(&dir).map(|m| gb_bytes(m.ram_gb)).unwrap_or(gb_bytes(2));
     let mut guard = host.lock().map_err(|e| e.to_string())?;
@@ -150,6 +152,36 @@ fn server_ram(
         .map(|p| p.memory())
         .unwrap_or(0);
     Ok(ServerRam { used, allocated })
+}
+
+#[derive(Serialize)]
+struct ServerStats {
+    cpu: f32,
+    ram_used: u64,
+    ram_alloc: u64,
+    uptime_secs: u64,
+}
+
+/// CPU, RAM, uptime and thread count of the server process only.
+#[tauri::command]
+fn server_stats(
+    app: AppHandle,
+    host: tauri::State<'_, Arc<Mutex<HostStats>>>,
+    state: tauri::State<'_, Arc<ServerState>>,
+    id: String,
+) -> Result<ServerStats, String> {
+    let pid = server_pid(&state, &id)?;
+    let dir = data_root(&app)?.join("servers").join(&id);
+    let allocated = load_meta(&dir).map(|m| gb_bytes(m.ram_gb)).unwrap_or(gb_bytes(2));
+    let mut guard = host.lock().map_err(|e| e.to_string())?;
+    guard.sys.refresh_all();
+    let proc = guard.sys.processes().values().find(|p| p.pid().as_u32() == pid);
+    Ok(ServerStats {
+        cpu: proc.map(|p| p.cpu_usage()).unwrap_or(0.0),
+        ram_used: proc.map(|p| p.memory()).unwrap_or(0),
+        ram_alloc: allocated,
+        uptime_secs: proc.map(|p| p.run_time()).unwrap_or(0),
+    })
 }
 
 #[derive(Serialize, Clone)]
@@ -301,19 +333,13 @@ fn stream_lines(
     }
 }
 
-#[tauri::command]
-fn start_server(
-    app: AppHandle,
-    state: tauri::State<'_, Arc<ServerState>>,
-    id: String,
-) -> Result<String, String> {
-    let state = state.inner().clone();
-    let root = data_root(&app)?;
+fn do_start(app: &AppHandle, state: &Arc<ServerState>, id: &str) -> Result<String, String> {
+    let root = data_root(app)?;
     let dir = root.join("servers").join(&id);
     if !dir.is_dir() {
         return Err(format!("server folder not found: {id}"));
     }
-    if state.running.lock().map_err(|e| e.to_string())?.contains_key(&id) {
+    if state.running.lock().map_err(|e| e.to_string())?.contains_key(id) {
         return Err("this server is already running".into());
     }
     let jar = pick_jar(&dir).ok_or_else(|| {
@@ -355,7 +381,7 @@ fn start_server(
         .lock()
         .map_err(|e| e.to_string())?
         .insert(
-            id.clone(),
+            id.to_string(),
             ServerProc {
                 dir,
                 child: child_for_map,
@@ -363,7 +389,7 @@ fn start_server(
             },
         );
 
-    let (app_out, id_out, log_out, state_out) = (app.clone(), id.clone(), Arc::clone(&log), state.clone());
+    let (app_out, id_out, log_out, state_out) = (app.clone(), id.to_string(), Arc::clone(&log), Arc::clone(state));
     std::thread::spawn(move || {
         stream_lines(stdout, &app_out, &id_out, "stdout", &log_out);
         let code = {
@@ -375,7 +401,7 @@ fn start_server(
         let _ = app_out.emit("server-exit", serde_json::json!({ "id": id_out, "code": code }));
     });
 
-    let (app_err, id_err, log_err) = (app.clone(), id.clone(), Arc::clone(&log));
+    let (app_err, id_err, log_err) = (app.clone(), id.to_string(), Arc::clone(&log));
     std::thread::spawn(move || {
         stream_lines(stderr, &app_err, &id_err, "stderr", &log_err);
     });
@@ -383,16 +409,22 @@ fn start_server(
     Ok(format!("starting {id} from {}", jar.file_name().unwrap_or_default().to_string_lossy()))
 }
 
+/// Start wrapper for the UI.
 #[tauri::command]
-fn stop_server(
+fn start_server(
+    app: AppHandle,
     state: tauri::State<'_, Arc<ServerState>>,
     id: String,
 ) -> Result<String, String> {
+    do_start(&app, &state, &id)
+}
+
+fn do_stop(state: &Arc<ServerState>, id: &str) -> Result<String, String> {
     let entry = state
         .running
         .lock()
         .map_err(|e| e.to_string())?
-        .remove(&id)
+        .remove(id)
         .ok_or_else(|| "this server is not running".to_string())?;
     entry
         .child
@@ -401,6 +433,15 @@ fn stop_server(
         .kill()
         .map_err(|e| e.to_string())?;
     Ok(format!("stopping {id}"))
+}
+
+/// Stop wrapper for the UI.
+#[tauri::command]
+fn stop_server(
+    state: tauri::State<'_, Arc<ServerState>>,
+    id: String,
+) -> Result<String, String> {
+    do_stop(&state, &id)
 }
 
 #[tauri::command]
@@ -424,6 +465,16 @@ fn send_console(
     // BufWriter buffers; flush so the command reaches the server immediately.
     stdin.flush().map_err(|e| e.to_string())?;
     Ok(line)
+}
+
+/// Send a console line to a running server (used by the scheduler thread).
+fn send_line(state: &Arc<ServerState>, id: &str, line: &str) -> Result<(), String> {
+    let mut map = state.running.lock().map_err(|e| e.to_string())?;
+    let entry = map.get_mut(id).ok_or_else(|| "this server is not running".to_string())?;
+    let stdin = entry.stdin.as_mut().ok_or_else(|| "no console input".to_string())?;
+    writeln!(stdin, "{line}").map_err(|e| e.to_string())?;
+    stdin.flush().map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 // -------------------------------------------------------- versions + downloads
@@ -617,6 +668,437 @@ fn open_server_dir(app: AppHandle, id: String) -> Result<String, String> {
     Ok(dir.to_string_lossy().to_string())
 }
 
+// ------------------------------------------------------------- backups
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+fn utc_stamp(secs: u64) -> String {
+    let days = secs / 86400;
+    let rem = secs % 86400;
+    let h = rem / 3600;
+    let m = (rem % 3600) / 60;
+    let s = rem % 60;
+    // civil-from-days (Howard Hinnant)
+    let z = days as i64 + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let mo = if mp < 10 { mp + 3 } else { mp - 9 };
+    let yy = if mo <= 2 { y + 1 } else { y };
+    format!("{yy:04}{mo:02}{d:02}-{h:02}{m:02}{s:02}")
+}
+
+fn copy_tree(src: &Path, dst: &Path) -> Result<u64, String> {
+    fs::create_dir_all(dst).map_err(|e| e.to_string())?;
+    let mut total = 0;
+    for entry in fs::read_dir(src).map_err(|e| e.to_string())?.flatten() {
+        let path = entry.path();
+        let name = entry.file_name();
+        if path.is_dir() {
+            total += copy_tree(&path, &dst.join(name))?;
+        } else if name.to_string_lossy() != "download.tmp" {
+            let to = dst.join(&name);
+            fs::copy(&path, &to).map_err(|e| e.to_string())?;
+            total += fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        }
+    }
+    Ok(total)
+}
+
+fn tree_size(dir: &Path) -> u64 {
+    let mut total = 0;
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                total += tree_size(&path);
+            } else {
+                total += fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            }
+        }
+    }
+    total
+}
+
+fn backup_dir_for(app: &AppHandle, id: &str) -> Result<PathBuf, String> {
+    Ok(data_root(app)?.join("backups").join(id))
+}
+
+fn validate_part(name: &str) -> Result<(), String> {
+    if name.is_empty()
+        || name == "."
+        || name == ".."
+        || name.contains('/')
+        || name.contains("\\")
+        || name.contains('\0')
+    {
+        return Err("invalid backup name".into());
+    }
+    Ok(())
+}
+
+fn do_backup(app: &AppHandle, id: &str) -> Result<String, String> {
+    let dir = server_dir_for(app, id)?;
+    let dest = backup_dir_for(app, id)?
+        .join(format!("backup-{}-utc", utc_stamp(unix_now())));
+    copy_tree(&dir, &dest)?;
+    Ok(dest
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default())
+}
+
+#[tauri::command]
+fn create_backup(app: AppHandle, id: String) -> Result<String, String> {
+    do_backup(&app, &id)
+}
+
+#[derive(Serialize, Clone)]
+struct BackupInfo {
+    name: String,
+    size: u64,
+    mtime: u64,
+}
+
+#[tauri::command]
+fn list_backups(app: AppHandle, id: String) -> Result<Vec<BackupInfo>, String> {
+    let root = backup_dir_for(&app, &id)?;
+    let mut out = Vec::new();
+    if root.is_dir() {
+        for entry in fs::read_dir(&root).map_err(|e| e.to_string())?.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                out.push(BackupInfo {
+                    name: entry.file_name().to_string_lossy().to_string(),
+                    size: tree_size(&path),
+                    mtime: entry
+                        .metadata()
+                        .and_then(|m| m.modified())
+                        .ok()
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0),
+                });
+            }
+        }
+    }
+    out.sort_by(|a, b| b.name.cmp(&a.name));
+    Ok(out)
+}
+
+#[tauri::command]
+fn restore_backup(
+    app: AppHandle,
+    state: tauri::State<'_, Arc<ServerState>>,
+    id: String,
+    name: String,
+) -> Result<String, String> {
+    validate_part(&name)?;
+    if state
+        .running
+        .lock()
+        .map_err(|e| e.to_string())?
+        .contains_key(&id)
+    {
+        return Err("stop the server before restoring a backup".into());
+    }
+    let src = backup_dir_for(&app, &id)?.join(&name);
+    if !src.is_dir() {
+        return Err("that backup does not exist".into());
+    }
+    let dir = server_dir_for(&app, &id)?;
+    for entry in fs::read_dir(&dir).map_err(|e| e.to_string())?.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            fs::remove_dir_all(&path).map_err(|e| e.to_string())?;
+        } else {
+            fs::remove_file(&path).map_err(|e| e.to_string())?;
+        }
+    }
+    copy_tree(&src, &dir)?;
+    Ok("backup restored — start the server to use it".into())
+}
+
+#[tauri::command]
+fn delete_backup(app: AppHandle, id: String, name: String) -> Result<String, String> {
+    validate_part(&name)?;
+    let path = backup_dir_for(&app, &id)?.join(&name);
+    if path.is_dir() {
+        fs::remove_dir_all(&path).map_err(|e| e.to_string())?;
+    }
+    Ok("backup deleted".into())
+}
+
+// ------------------------------------------------------------ scheduler
+
+fn sched_path(dir: &Path) -> PathBuf {
+    dir.join(".scheduler.json")
+}
+
+fn load_schedules(dir: &Path) -> Option<Vec<serde_json::Value>> {
+    let text = fs::read_to_string(sched_path(dir)).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+fn save_schedules(dir: &Path, list: &[serde_json::Value]) -> Result<(), String> {
+    fs::write(
+        sched_path(dir),
+        serde_json::to_string_pretty(list).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())
+}
+
+fn sched_value(
+    sid: u64,
+    action: &str,
+    next_run: u64,
+    repeat: &str,
+    command: &Option<String>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "sid": sid,
+        "action": action,
+        "next_run": next_run,
+        "repeat": repeat,
+        "command": command,
+    })
+}
+
+#[tauri::command]
+fn list_schedules(app: AppHandle, id: String) -> Result<Vec<serde_json::Value>, String> {
+    let dir = server_dir_for(&app, &id)?;
+    Ok(load_schedules(&dir).unwrap_or_default())
+}
+
+#[tauri::command]
+fn add_schedule(
+    app: AppHandle,
+    id: String,
+    action: String,
+    delay_secs: u64,
+    repeat: String,
+    command: Option<String>,
+) -> Result<Vec<serde_json::Value>, String> {
+    let dir = server_dir_for(&app, &id)?;
+    let mut list = load_schedules(&dir).unwrap_or_default();
+    let sid = list
+        .iter()
+        .filter_map(|v| v.get("sid").and_then(|s| s.as_u64()))
+        .max()
+        .unwrap_or(0)
+        + 1;
+    let repeat = match repeat.as_str() {
+        "hourly" | "daily" | "weekly" => repeat,
+        _ => "none".to_string(),
+    };
+    let action = match action.as_str() {
+        "start" | "stop" | "restart" | "backup" | "command" => action,
+        _ => return Err("unknown schedule action".into()),
+    };
+    if action == "command" && command.as_deref().map(str::trim).unwrap_or("").is_empty() {
+        return Err("give the command schedule a console command".into());
+    }
+    let delay = delay_secs.clamp(10, 31_536_000);
+    list.push(sched_value(sid, &action, unix_now() + delay, &repeat, &command));
+    save_schedules(&dir, &list)?;
+    Ok(list)
+}
+
+#[tauri::command]
+fn remove_schedule(app: AppHandle, id: String, sid: u64) -> Result<Vec<serde_json::Value>, String> {
+    let dir = server_dir_for(&app, &id)?;
+    let mut list = load_schedules(&dir).unwrap_or_default();
+    list.retain(|v| v.get("sid").and_then(|s| s.as_u64()) != Some(sid));
+    save_schedules(&dir, &list)?;
+    Ok(list)
+}
+
+/// Background loop that runs due schedules for every server.
+fn spawn_scheduler(app: AppHandle, state: Arc<ServerState>) {
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(Duration::from_secs(15));
+            let Ok(servers_root) = app.path().app_data_dir() else {
+                continue;
+            };
+            let servers_root = servers_root.join("servers");
+            if !servers_root.is_dir() {
+                continue;
+            }
+            let now = unix_now();
+            let Ok(entries) = fs::read_dir(&servers_root) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let dir = entry.path();
+                if !dir.is_dir() {
+                    continue;
+                }
+                let id = entry.file_name().to_string_lossy().to_string();
+                let mut list = match load_schedules(&dir) {
+                    Some(l) if l.iter().any(|v| {
+                        v.get("next_run").and_then(|n| n.as_u64()).unwrap_or(u64::MAX) <= now
+                    }) => l,
+                    _ => continue,
+                };
+                let mut changed = false;
+                for s in list.iter_mut() {
+                    if s.get("next_run").and_then(|n| n.as_u64()).unwrap_or(u64::MAX) > now {
+                        continue;
+                    }
+                    let action = s.get("action").and_then(|a| a.as_str()).unwrap_or("");
+                    let repeat = s.get("repeat").and_then(|r| r.as_str()).unwrap_or("none");
+                    let command = s.get("command").and_then(|c| c.as_str()).map(str::to_string);
+                    match action {
+                        "start" => {
+                            let _ = do_start(&app, &state, &id);
+                        }
+                        "stop" => {
+                            let _ = do_stop(&state, &id);
+                        }
+                        "restart" => {
+                            let _ = do_stop(&state, &id);
+                            std::thread::sleep(Duration::from_secs(2));
+                            let _ = do_start(&app, &state, &id);
+                        }
+                        "backup" => {
+                            let _ = do_backup(&app, &id);
+                        }
+                        "command" => {
+                            if let Some(line) = command.as_deref().map(str::trim).filter(|l| !l.is_empty()) {
+                                let _ = send_line(&state, &id, line);
+                            }
+                        }
+                        _ => {}
+                    }
+                    let interval: u64 = match repeat {
+                        "hourly" => 3600,
+                        "daily" => 86_400,
+                        "weekly" => 604_800,
+                        _ => 0,
+                    };
+                    if let Some(next) = s.get_mut("next_run") {
+                        *next = serde_json::json!(now.saturating_add(interval));
+                    }
+                    changed = true;
+                }
+                if changed {
+                    if let Ok(_) = save_schedules(&dir, &list) {}
+                }
+            }
+        }
+    });
+}
+
+// -------------------------------------------------------------- players
+
+#[derive(Serialize, Clone)]
+struct PlayerInfo {
+    name: String,
+    uuid: String,
+}
+
+fn read_level_name(dir: &Path) -> String {
+    if let Ok(text) = fs::read_to_string(dir.join("server.properties")) {
+        for line in text.lines() {
+            let Some(eq) = line.find('=') else {
+                continue;
+            };
+            if line[..eq].trim() == "level-name" {
+                return line[eq + 1..].trim().to_string();
+            }
+        }
+    }
+    "world".into()
+}
+
+/// Past players: parsed from the `<level>/players/*.dat` uuid files.
+#[tauri::command]
+fn list_players(app: AppHandle, id: String) -> Result<Vec<PlayerInfo>, String> {
+    let dir = server_dir_for(&app, &id)?;
+    let players_dir = dir.join(read_level_name(&dir)).join("players");
+    let mut out = Vec::new();
+    if players_dir.is_dir() {
+        for entry in fs::read_dir(&players_dir).map_err(|e| e.to_string())?.flatten() {
+            let path = entry.path();
+            if path.extension().map(|e| e == "dat").unwrap_or(false) {
+                let raw = entry.file_name().to_string_lossy().to_string();
+                let uuid = raw.strip_suffix(".dat").unwrap_or(&raw).to_string();
+                let name = uuid.split('-').next().unwrap_or("").to_string();
+                out.push(PlayerInfo { name, uuid });
+            }
+        }
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(out)
+}
+
+/// Whitelisted players from `whitelist.json`.
+#[tauri::command]
+fn list_whitelist(app: AppHandle, id: String) -> Result<Vec<PlayerInfo>, String> {
+    let dir = server_dir_for(&app, &id)?;
+    let text = match fs::read_to_string(dir.join("whitelist.json")) {
+        Ok(t) => t,
+        Err(_) => return Ok(Vec::new()),
+    };
+    let Ok(value) = serde_json::from_str::<Vec<serde_json::Value>>(&text) else {
+        return Ok(Vec::new());
+    };
+    Ok(value
+        .iter()
+        .filter_map(|v| {
+            let name = v.get("name").and_then(|n| n.as_str()).map(str::to_string)?;
+            let uuid = v
+                .get("uuid")
+                .and_then(|u| u.as_str())
+                .map(str::to_string)
+                .unwrap_or_default();
+            Some(PlayerInfo { name, uuid })
+        })
+        .collect())
+}
+
+// ------------------------------------------------------------- plugins
+
+/// Downloads a plugin jar into the server folder (Modrinth file url).
+#[tauri::command]
+fn install_plugin(app: AppHandle, id: String, url: String, filename: String) -> Result<String, String> {
+    let dir = server_dir_for(&app, &id)?;
+    let safe_name: String = filename
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | ' '))
+        .collect();
+    let name = if safe_name.is_empty() { "plugin.jar".to_string() } else { safe_name };
+    let tmp = dir.join(format!(".plugin-download-{name}.tmp"));
+    let out = Command::new("curl")
+        .args(["-sSL", "--fail", "--max-time", "600", "-o", tmp.to_str().ok_or("bad path")?, &url])
+        .output()
+        .map_err(|e| format!("curl is not available on this machine: {e}"))?;
+    if !out.status.success() {
+        let _ = fs::remove_file(&tmp);
+        let detail = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        return Err(format!(
+            "plugin download failed (exit {}){}",
+            out.status.code().unwrap_or(-1),
+            if detail.is_empty() { String::new() } else { format!(": {detail}") }
+        ));
+    }
+    fs::rename(&tmp, dir.join(&name)).map_err(|e| {
+        let _ = fs::remove_file(&tmp);
+        e.to_string()
+    })?;
+    Ok(format!("{name} added to the server — restart it to load the plugin"))
+}
+
 // ------------------------------------------------------------------- files
 
 #[derive(Serialize)]
@@ -690,12 +1172,14 @@ fn main() {
         sys: System::new_all(),
         ready: false,
     }));
+    let scheduler_state = Arc::clone(&state);
     tauri::Builder::default()
         .manage(state)
         .manage(host)
         .invoke_handler(tauri::generate_handler![
             host_telemetry,
             server_ram,
+            server_stats,
             ensure_data_dir,
             list_servers,
             create_server,
@@ -707,8 +1191,22 @@ fn main() {
             send_console,
             list_files,
             read_file,
-            write_file
+            write_file,
+            list_players,
+            list_whitelist,
+            create_backup,
+            list_backups,
+            restore_backup,
+            delete_backup,
+            list_schedules,
+            add_schedule,
+            remove_schedule,
+            install_plugin
         ])
+        .setup(|app| {
+            spawn_scheduler(app.handle().clone(), scheduler_state);
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("failed to run RedstonePanel desktop app");
 }
