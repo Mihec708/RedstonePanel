@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   Activity,
@@ -9,9 +9,9 @@ import {
   SlidersHorizontal,
   SquareTerminal,
   Users,
-  Zap,
 } from 'lucide-react';
 import './styles.css';
+import { playRandomBlockSound } from './blocksound';
 import { AppProvider, useApp } from './AppContext';
 import { AddServerButton, AddServerModal } from './AddServerModal';
 import { MainTab } from './tabs/MainTab';
@@ -38,14 +38,25 @@ function Workspace() {
   const { selected, selectServer, servers, error, setError, notice, setNotice, dataDir } = useApp();
   const [tab, setTab] = useState<Tab>('main');
   const [showAdd, setShowAdd] = useState(false);
+  const logoClicks = useRef(0);
 
   return (
     <main className="app-shell">
       <aside className="sidebar">
         <div className="brand">
-          <div className="redstone-logo">
-            <Zap size={28} fill="currentColor" />
-          </div>
+          <button
+            type="button"
+            className="app-logo"
+            title="RedstonePanel"
+            aria-label="RedstonePanel logo"
+            onClick={() => {
+              const n = logoClicks.current + 1;
+              logoClicks.current = n >= 15 ? 0 : n;
+              if (n >= 15) playRandomBlockSound();
+            }}
+          >
+            <img src="/logo.png" alt="" />
+          </button>
           <div>
             <strong>RedstonePanel</strong>
             <span>Desktop Server HQ</span>
